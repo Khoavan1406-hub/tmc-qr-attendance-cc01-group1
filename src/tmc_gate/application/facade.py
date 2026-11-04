@@ -3,6 +3,7 @@
 from datetime import datetime
 
 from tmc_gate.application.processor import GateTransactionProcessor
+from tmc_gate.domain.enums import ScanState
 from tmc_gate.domain.models import ScanResult, SupportCase
 from tmc_gate.domain.snapshot import EligibilitySnapshot
 from tmc_gate.ports.inbound import GateCoreApi
@@ -24,6 +25,8 @@ class GateCoreFacade(GateCoreApi):
         self._snapshot_repo = snapshot_repo
         self._outbox_repo = outbox_repo
 
+    # --- IScanSubmission (StationClient) ---
+
     def submitScan(
         self,
         scanId: str,
@@ -31,16 +34,15 @@ class GateCoreFacade(GateCoreApi):
         laneId: str,
         now: datetime | None = None,
     ) -> ScanResult:
-        """TODO [Package 3]: Delegate to `self._processor.processScan(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.submitScan")
+        return self._processor.processScan(scanId=scanId, qrToken=qrToken, laneId=laneId, now=now)
 
     def getScanStatus(self, scanId: str) -> ScanResult | None:
-        """TODO [Package 3]: Delegate to `self._processor.getScanStatus(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.getScanStatus")
+        return self._processor.getScanStatus(scanId=scanId)
+
+    # --- IInterventionRequest (M3 Gate Intervention) ---
 
     def recordIntervention(self, case: SupportCase) -> bool:
-        """TODO [Package 3]: Delegate to `self._processor.recordIntervention(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.recordIntervention")
+        return self._processor.recordIntervention(case=case)
 
     def requestAssistedOpen(
         self,
@@ -48,8 +50,7 @@ class GateCoreFacade(GateCoreApi):
         laneId: str,
         now: datetime | None = None,
     ) -> ScanResult:
-        """TODO [Package 3]: Delegate to `self._processor.requestAssistedOpen(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.requestAssistedOpen")
+        return self._processor.requestAssistedOpen(supportCaseId=supportCaseId, laneId=laneId, now=now)
 
     def requestEmergencyRelease(
         self,
@@ -57,8 +58,7 @@ class GateCoreFacade(GateCoreApi):
         laneId: str,
         now: datetime | None = None,
     ) -> ScanResult:
-        """TODO [Package 3]: Delegate to `self._processor.requestEmergencyRelease(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.requestEmergencyRelease")
+        return self._processor.requestEmergencyRelease(supportCaseId=supportCaseId, laneId=laneId, now=now)
 
     def resetEmergency(
         self,
@@ -66,12 +66,13 @@ class GateCoreFacade(GateCoreApi):
         laneId: str,
         now: datetime | None = None,
     ) -> ScanResult:
-        """TODO [Package 3]: Delegate to `self._processor.resetEmergency(...)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.resetEmergency")
+        return self._processor.resetEmergency(supportCaseId=supportCaseId, laneId=laneId, now=now)
+
+    # --- IFactoryUpdates (M9 Site Sync) ---
 
     def applyEligibilityChanges(self, snapshot: EligibilitySnapshot) -> bool:
-        """TODO [Package 3]: Save updated snapshot via `self._snapshot_repo.save_snapshot(snapshot)`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.applyEligibilityChanges")
+        self._snapshot_repo.save_snapshot(snapshot)
+        return True
 
     def applyScanResolution(
         self,
@@ -79,9 +80,22 @@ class GateCoreFacade(GateCoreApi):
         scanId: str,
         conclusion: str,
     ) -> bool:
-        """TODO [Package 3]: Mark scan as RECONCILED and append RESOLUTION_APPLIED event to outbox."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.applyScanResolution")
+        scan = self._scan_repo.get_scan(scanId)
+        if scan is None:
+            return False
+        scan.state = ScanState.RECONCILED
+        scan.reason = f"RECONCILED:{decisionId}:{conclusion}"
+        self._scan_repo.save_scan(scan)
+        self._outbox_repo.append_event(
+            {
+                "eventId": f"evt-res-{decisionId}",
+                "eventType": "RESOLUTION_APPLIED",
+                "decisionId": decisionId,
+                "scanId": scanId,
+                "conclusion": conclusion,
+            }
+        )
+        return True
 
     def readCommittedEvents(self) -> list[dict[str, object]]:
-        """TODO [Package 3]: Return pending events from `self._outbox_repo.list_pending_events()`."""
-        raise NotImplementedError("TODO [Package 3]: Implement GateCoreFacade.readCommittedEvents")
+        return self._outbox_repo.list_pending_events()
