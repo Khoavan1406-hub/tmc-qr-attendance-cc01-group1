@@ -2,12 +2,17 @@
 
 from datetime import datetime
 
-from tmc_gate.application.processor import GateTransactionProcessor
-from tmc_gate.domain.enums import ScanState
+from tmc_gate.application.processor import GateTransactionProcessor, _NoOpUnitOfWork
+from tmc_gate.domain.enums import DedupStatus, ScanState
 from tmc_gate.domain.models import ScanResult, SupportCase
 from tmc_gate.domain.snapshot import EligibilitySnapshot
 from tmc_gate.ports.inbound import GateCoreApi
-from tmc_gate.ports.repositories import IOutboxRepository, IScanRepository, ISnapshotRepository
+from tmc_gate.ports.repositories import (
+    IOutboxRepository,
+    IScanRepository,
+    ISnapshotRepository,
+    IUnitOfWork,
+)
 
 
 class GateCoreFacade(GateCoreApi):
@@ -19,11 +24,13 @@ class GateCoreFacade(GateCoreApi):
         scan_repo: IScanRepository,
         snapshot_repo: ISnapshotRepository,
         outbox_repo: IOutboxRepository,
+        uow: IUnitOfWork | None = None,
     ) -> None:
         self._processor = processor
         self._scan_repo = scan_repo
         self._snapshot_repo = snapshot_repo
         self._outbox_repo = outbox_repo
+        self._uow: IUnitOfWork = uow or _NoOpUnitOfWork()
 
     # --- IScanSubmission (StationClient) ---
 
@@ -33,8 +40,15 @@ class GateCoreFacade(GateCoreApi):
         qrToken: str,
         laneId: str,
         now: datetime | None = None,
+        deadline: datetime | None = None,
     ) -> ScanResult:
-        return self._processor.processScan(scanId=scanId, qrToken=qrToken, laneId=laneId, now=now)
+        return self._processor.processScan(
+            scanId=scanId,
+            qrToken=qrToken,
+            laneId=laneId,
+            now=now,
+            deadline=deadline,
+        )
 
     def getScanStatus(self, scanId: str) -> ScanResult | None:
         return self._processor.getScanStatus(scanId=scanId)
@@ -60,18 +74,42 @@ class GateCoreFacade(GateCoreApi):
     ) -> ScanResult:
         return self._processor.requestEmergencyRelease(supportCaseId=supportCaseId, laneId=laneId, now=now)
 
-    def resetEmergency(
+    def requestEmergencyReset(
         self,
         supportCaseId: str,
         laneId: str,
         now: datetime | None = None,
     ) -> ScanResult:
-        return self._processor.resetEmergency(supportCaseId=supportCaseId, laneId=laneId, now=now)
+        return self._processor.requestEmergencyReset(supportCaseId=supportCaseId, laneId=laneId, now=now)
 
     # --- IFactoryUpdates (M9 Site Sync) ---
 
-    def applyEligibilityChanges(self, snapshot: EligibilitySnapshot) -> bool:
-        self._snapshot_repo.save_snapshot(snapshot)
+    def applyEligibilityChanges(
+        self,
+        snapshot: EligibilitySnapshot,
+        eventId: str | None = None,
+    ) -> bool:
+        evt_id = eventId or f"elig-v{snapshot.snapshotVersion}"
+        payload = {
+            "factoryId": snapshot.factoryId,
+            "snapshotVersion": snapshot.snapshotVersion,
+            "confirmedWatermark": snapshot.confirmedWatermark.isoformat(),
+        }
+        with self._uow:
+            status = self._outbox_repo.check_and_mark_processed("GATE_CORE_ELIGIBILITY", evt_id, payload)
+            if status == DedupStatus.CONFLICT_FLAGGED:
+                self._uow.commit()
+                return False
+            if status == DedupStatus.APPLIED:
+                current = self._snapshot_repo.get_snapshot()
+                # §5.7.2 (p. 91): "Duplicates, older versions... cannot refresh the watermark."
+                if snapshot.snapshotVersion < current.snapshotVersion:
+                    self._uow.commit()
+                    return False
+                if snapshot.confirmedWatermark < current.confirmedWatermark:
+                    snapshot.confirmedWatermark = current.confirmedWatermark
+                self._snapshot_repo.save_snapshot(snapshot)
+            self._uow.commit()
         return True
 
     def applyScanResolution(
@@ -79,22 +117,35 @@ class GateCoreFacade(GateCoreApi):
         decisionId: str,
         scanId: str,
         conclusion: str,
+        eventId: str | None = None,
     ) -> bool:
-        scan = self._scan_repo.get_scan(scanId)
-        if scan is None:
-            return False
-        scan.state = ScanState.RECONCILED
-        scan.reason = f"RECONCILED:{decisionId}:{conclusion}"
-        self._scan_repo.save_scan(scan)
-        self._outbox_repo.append_event(
-            {
-                "eventId": f"evt-res-{decisionId}",
-                "eventType": "RESOLUTION_APPLIED",
-                "decisionId": decisionId,
-                "scanId": scanId,
-                "conclusion": conclusion,
-            }
-        )
+        evt_id = eventId or f"res-{decisionId}"
+        payload = {"decisionId": decisionId, "scanId": scanId, "conclusion": conclusion}
+        with self._uow:
+            status = self._outbox_repo.check_and_mark_processed("GATE_CORE_RESOLUTION", evt_id, payload)
+            if status == DedupStatus.CONFLICT_FLAGGED:
+                self._uow.commit()
+                return False
+            if status == DedupStatus.DUPLICATE_IGNORED:
+                self._uow.commit()
+                return True
+            scan = self._scan_repo.get_scan(scanId)
+            if scan is None:
+                self._uow.commit()
+                return False
+            scan.state = ScanState.RECONCILED
+            scan.reason = f"RECONCILED:{decisionId}:{conclusion}"
+            self._scan_repo.save_scan(scan)
+            self._outbox_repo.append_event(
+                {
+                    "eventId": f"evt-res-{decisionId}",
+                    "eventType": "RESOLUTION_APPLIED",
+                    "decisionId": decisionId,
+                    "scanId": scanId,
+                    "conclusion": conclusion,
+                }
+            )
+            self._uow.commit()
         return True
 
     def readCommittedEvents(self) -> list[dict[str, object]]:

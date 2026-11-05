@@ -5,6 +5,7 @@ Must ONLY import from tmc_gate.domain.
 
 from tmc_gate.ports.inbound import (
     GateCoreApi,
+    GateInterventionApi,
     IFactoryUpdates,
     IInterventionRequest,
     IScanSubmission,
@@ -17,9 +18,11 @@ from tmc_gate.ports.repositories import (
     IOutboxRepository,
     IScanRepository,
     ISnapshotRepository,
+    IUnitOfWork,
 )
 from tmc_gate.ports.turnstile import (
     ICloseGate,
+    IControllerStatusQuery,
     IEmergencyGate,
     IOpenGate,
     IPassageEvents,
@@ -31,11 +34,14 @@ __all__ = [
     "IInterventionRequest",
     "IFactoryUpdates",
     "GateCoreApi",
+    "GateInterventionApi",
     "IOpenGate",
     "ICloseGate",
     "IEmergencyGate",
     "IPassageEvents",
+    "IControllerStatusQuery",
     "ITurnstileControl",
+    "IUnitOfWork",
     "IScanRepository",
     "IAttendanceRepository",
     "IOutboxRepository",

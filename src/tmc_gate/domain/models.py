@@ -125,6 +125,7 @@ class AttendanceTransaction:
     occurredAt: datetime
     source: str = "QR_GATE"
     degradedFlag: bool = False
+    snapshotVersion: int = 0
 
 
 @dataclass

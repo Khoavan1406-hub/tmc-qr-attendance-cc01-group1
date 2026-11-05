@@ -1,8 +1,10 @@
-"""[PACKAGE 4] SQLite persistence adapters for M1 Gate Core (Figure 4.2, Table 4.7, §5.6.1, ADR-02, ADR-05, ADR-11).
+"""[PACKAGE 4] SQLite Unit of Work and Persistence adapters for M1 Gate Core (Figure 4.2, Table 4.7, §5.6.1, ADR-02, ADR-05, ADR-11).
 
-Enforces atomic transactions for:
-1. Reserve lane (active GateCycle) + Claim tokenId (TokenReservation) + Persist ScanAttempt(ACCEPTED).
-2. Store PassageEvent + at most one original AttendanceTransaction per scanId + Outbox event + Audit evidence.
+Transaction rules:
+- SqliteUnitOfWork implements IUnitOfWork (begin / commit / rollback).
+- Every repository receives the transaction context from IUnitOfWork and NEVER opens or commits transactions on its own.
+- Supports 1 GateCycle -> 0..* PassageEvent (each passageEventId accepted once; at most 1 original AttendanceTransaction per scanId).
+- Supports simulated consumer deduplication keyed by (consumer, eventId) with payload conflict detection.
 """
 
 from __future__ import annotations
@@ -10,6 +12,7 @@ from __future__ import annotations
 import sqlite3
 import threading
 
+from tmc_gate.domain.enums import DedupStatus
 from tmc_gate.domain.models import (
     AttendanceTransaction,
     GateCommand,
@@ -26,14 +29,18 @@ from tmc_gate.ports.repositories import (
     IOutboxRepository,
     IScanRepository,
     ISnapshotRepository,
+    IUnitOfWork,
 )
 
 
-def create_sqlite_connection(db_path: str = ":memory:") -> sqlite3.Connection:
-    """Create a thread-safe SQLite connection configured for explicit transactions."""
-    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
+def create_sqlite_connection(db_path: str = ":memory:", busy_timeout_ms: int = 2_000) -> sqlite3.Connection:
+    """Create a thread-safe SQLite connection configured for explicit UnitOfWork transactions."""
+    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None, timeout=busy_timeout_ms / 1000.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)};")
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL;")
     return conn
 
 
@@ -110,7 +117,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             direction TEXT NOT NULL,
             occurred_at TEXT NOT NULL,
             source TEXT NOT NULL,
-            degraded_flag INTEGER NOT NULL DEFAULT 0
+            degraded_flag INTEGER NOT NULL DEFAULT 0,
+            snapshot_version INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS support_cases (
@@ -136,12 +144,54 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS processed_events (
+            consumer TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            conflict_flagged INTEGER NOT NULL DEFAULT 0,
+            processed_at TEXT NOT NULL,
+            PRIMARY KEY (consumer, event_id)
+        );
         """
     )
 
 
+class SqliteUnitOfWork(IUnitOfWork):
+    """Concrete SQLite Unit of Work owning begin / commit / rollback on a connection.
+
+    TODO [Package 4]:
+    Implement `begin(timeout_ms)`, `commit()`, and `rollback()` using `BEGIN IMMEDIATE`, `COMMIT`, and `ROLLBACK`.
+    """
+
+    def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
+        self._conn = conn
+        self._lock = lock or threading.RLock()
+        self._in_tx = False
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._conn
+
+    @property
+    def lock(self) -> threading.RLock:
+        return self._lock
+
+    def begin(self, timeout_ms: int | None = None) -> None:
+        """TODO [Package 4]: Set `PRAGMA busy_timeout` if `timeout_ms` is given and execute `BEGIN IMMEDIATE`."""
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteUnitOfWork.begin")
+
+    def commit(self) -> None:
+        """TODO [Package 4]: Execute `COMMIT`."""
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteUnitOfWork.commit")
+
+    def rollback(self) -> None:
+        """TODO [Package 4]: Execute `ROLLBACK`."""
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteUnitOfWork.rollback")
+
+
 class SqliteScanRepository(IScanRepository):
-    """SQLite implementation of IScanRepository with atomic lane & token reservation."""
+    """SQLite implementation of IScanRepository operating within SqliteUnitOfWork's transaction context."""
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
         self._conn = conn
@@ -163,7 +213,7 @@ class SqliteScanRepository(IScanRepository):
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_scan")
 
     def save_scan(self, scan: ScanAttempt, audit_payload: dict[str, object] | None = None) -> None:
-        """TODO [Package 4]: Persist `ScanAttempt` (and optional `audit_payload` in `local_audit_evidence`) in a transaction."""
+        """TODO [Package 4]: Stage `ScanAttempt` (and optional `audit_payload`) inside the active UnitOfWork transaction."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_scan")
 
     def get_lane(self, laneId: str) -> Lane | None:
@@ -180,15 +230,16 @@ class SqliteScanRepository(IScanRepository):
         reservation: TokenReservation,
         cycle: GateCycle,
         command: GateCommand,
+        timeout_ms: int | None = None,
     ) -> tuple[bool, str]:
-        """Execute Flow A4 in one atomic SQLite transaction (`BEGIN IMMEDIATE` ... `COMMIT`) (ADR-02, ADR-11).
+        """Execute Flow A4 inside the active UnitOfWork transaction (ADR-02, ADR-11).
 
         TODO [Package 4]:
-        1. If `self.simulate_write_failure` is True, return `(False, "STORAGE_FAILURE")`.
-        2. Check `lanes.active_cycle_id`: if not None, `ROLLBACK` and return `(False, "LANE_BUSY")` (do NOT claim tokenId!).
-        3. Check `token_reservations`: if `reservation.tokenId` already exists, `ROLLBACK` and return `(False, "TOKEN_ALREADY_CLAIMED")`.
-        4. Insert `token_reservations`, `gate_cycles`, update `lanes.active_cycle_id`, insert `scan_attempts`, and insert `gate_commands`.
-        5. `COMMIT` and return `(True, "ACCEPTED")`.
+        - If lane is busy -> return `(False, "LANE_BUSY")` without claiming `tokenId`.
+        - If `tokenId` is already claimed -> return `(False, "TOKEN_ALREADY_CLAIMED")`.
+        - If `busy_timeout` expires or write fails -> return `(False, "STORAGE_FAILURE")`.
+        - Otherwise stage `token_reservations`, `gate_cycles`, `lanes.active_cycle_id`, `scan_attempts`, and `gate_commands`
+          and return `(True, "ACCEPTED")`.
         """
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.atomic_reserve_lane_claim_token_and_accept")
 
@@ -204,7 +255,7 @@ class SqliteScanRepository(IScanRepository):
         auditPayload: dict[str, object] | None = None,
     ) -> None:
         """TODO [Package 4]: Update `scan_attempts.state`, `gate_commands.outcome`, release lane if requested,
-        and insert `outboxEvent` / `auditPayload` in one transaction.
+        and insert `outboxEvent` / `auditPayload` inside the active UnitOfWork transaction.
         """
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.update_opening_outcome")
 
@@ -225,8 +276,13 @@ class SqliteScanRepository(IScanRepository):
         """TODO [Package 4]: Upsert `gate_cycles`, optionally upsert `gate_commands`, and update `lanes.active_cycle_id`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.update_cycle")
 
-    def save_support_case(self, case: SupportCase) -> None:
-        """TODO [Package 4]: Insert or replace `SupportCase` in `support_cases`."""
+    def save_support_case(
+        self,
+        case: SupportCase,
+        outboxEvent: dict[str, object] | None = None,
+        auditPayload: dict[str, object] | None = None,
+    ) -> None:
+        """TODO [Package 4]: Stage `SupportCase` (and optional `outboxEvent`, `auditPayload`) in `support_cases`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_support_case")
 
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
@@ -251,9 +307,9 @@ class SqliteAttendanceRepository(IAttendanceRepository):
     ) -> bool:
         """TODO [Package 4]:
         1. Ignore duplicate `passage.passageEventId` (return False if already in `passage_events`).
-        2. Insert `passage_events`, update `gate_cycles.passage_status`, and if `transaction is not None`
-           insert at most one `attendance_transactions` row per `scan_id`.
-        3. Insert `outbox_events` and `local_audit_evidence` in the same transaction.
+        2. Insert `passage_events` (a GateCycle may have multiple PassageEvents), update `gate_cycles.passage_status`,
+           and if `transaction is not None` insert at most one `attendance_transactions` row per `scan_id`.
+        3. Insert `outbox_events` and `local_audit_evidence` in the same UnitOfWork transaction.
         """
         raise NotImplementedError("TODO [Package 4]: Implement SqliteAttendanceRepository.store_passage_and_attendance_atomic")
 
@@ -267,19 +323,32 @@ class SqliteAttendanceRepository(IAttendanceRepository):
 
 
 class SqliteOutboxRepository(IOutboxRepository):
-    """SQLite implementation of IOutboxRepository (Table 4.7, ADR-05)."""
+    """SQLite implementation of IOutboxRepository and simulated consumer deduplication (Table 4.7, ADR-05)."""
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
         self._conn = conn
         self._lock = lock or threading.RLock()
 
     def append_event(self, event: dict[str, object]) -> None:
-        """TODO [Package 4]: Insert event JSON into `outbox_events`."""
+        """TODO [Package 4]: Stage event JSON in `outbox_events`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteOutboxRepository.append_event")
 
     def list_pending_events(self) -> list[dict[str, object]]:
         """TODO [Package 4]: Return all events from `outbox_events`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteOutboxRepository.list_pending_events")
+
+    def check_and_mark_processed(
+        self,
+        consumer: str,
+        eventId: str,
+        payload: dict[str, object],
+    ) -> DedupStatus:
+        """TODO [Package 4]: Simulated consumer deduplication keyed by `(consumer, eventId)` in `processed_events`:
+        - New `(consumer, eventId)` -> insert and return `DedupStatus.APPLIED`.
+        - Same `(consumer, eventId)` with identical payload -> return `DedupStatus.DUPLICATE_IGNORED`.
+        - Same `(consumer, eventId)` with different payload -> flag conflict and return `DedupStatus.CONFLICT_FLAGGED`.
+        """
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteOutboxRepository.check_and_mark_processed")
 
 
 class SqliteSnapshotRepository(ISnapshotRepository):

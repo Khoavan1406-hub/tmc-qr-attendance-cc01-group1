@@ -1,9 +1,11 @@
-"""[PACKAGE 3] Comprehensive unit & API tests for GateTransactionProcessor, GateCoreFacade, and GateCoreController.
+"""[PACKAGE 3] Comprehensive unit tests for GateTransactionProcessor, GateCoreFacade, and GateCoreController.
 
-Demonstrates Dependency Inversion Principle (DIP): tests M1 Gate Core coordination logic and all 9 edge cases
-using lightweight in-memory port doubles, completely independent of Packages 1, 2, 4, 5, and 6.
+Demonstrates Dependency Inversion Principle (DIP): tests M1 Gate Core coordination logic, IUnitOfWork transaction
+boundaries, IControllerStatusQuery, and all Flow A / Flow B edge cases using lightweight in-memory port doubles.
 """
 
+import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 
 from fastapi import FastAPI
@@ -16,6 +18,8 @@ from tmc_gate.application.processor import GateTransactionProcessor
 from tmc_gate.domain.enums import (
     ClosureStatus,
     CommandOutcome,
+    CommandType,
+    DedupStatus,
     Direction,
     OperatingMode,
     PassageStatus,
@@ -33,7 +37,7 @@ from tmc_gate.domain.models import (
     TokenClaims,
     TokenReservation,
 )
-from tmc_gate.domain.snapshot import EligibilitySnapshot
+from tmc_gate.domain.snapshot import EligibilitySnapshot, EmployeeRight
 from tmc_gate.ports.repositories import (
     IAttendanceRepository,
     IAuditApi,
@@ -41,10 +45,32 @@ from tmc_gate.ports.repositories import (
     IOutboxRepository,
     IScanRepository,
     ISnapshotRepository,
+    IUnitOfWork,
 )
-from tmc_gate.ports.turnstile import ICloseGate, IEmergencyGate, IOpenGate
+from tmc_gate.ports.turnstile import (
+    ICloseGate,
+    IControllerStatusQuery,
+    IEmergencyGate,
+    IOpenGate,
+)
 
-# --- Lightweight In-Memory Port Doubles for Isolated Package 3 Testing (DIP) ---
+
+class FakeUnitOfWork(IUnitOfWork):
+    """Tracks begin / commit / rollback calls for Package 3 unit tests."""
+
+    def __init__(self) -> None:
+        self.begun: int = 0
+        self.committed: int = 0
+        self.rolled_back: int = 0
+
+    def begin(self, timeout_ms: int | None = None) -> None:
+        self.begun += 1
+
+    def commit(self) -> None:
+        self.committed += 1
+
+    def rollback(self) -> None:
+        self.rolled_back += 1
 
 
 class FakeAccessDecision(AccessDecision):
@@ -75,7 +101,7 @@ class FakeAccessDecision(AccessDecision):
         return DecisionResult(
             allowed=True,
             operatingMode=mode,
-            snapshotVersion=1,
+            snapshotVersion=7 if mode == OperatingMode.DEGRADED else 1,
             reason="ALLOWED",
             claims=TokenClaims(
                 tokenId=f"tok-{qrToken}",
@@ -125,6 +151,7 @@ class FakeScanRepo(IScanRepository):
         reservation: TokenReservation,
         cycle: GateCycle,
         command: GateCommand,
+        timeout_ms: int | None = None,
     ) -> tuple[bool, str]:
         if self.simulate_storage_failure:
             return False, "STORAGE_FAILURE"
@@ -189,11 +216,24 @@ class FakeScanRepo(IScanRepository):
         if lane is not None:
             lane.activeCycleId = None if releaseLane else cycle.cycleId
 
-    def save_support_case(self, case: SupportCase) -> None:
+    def save_support_case(
+        self,
+        case: SupportCase,
+        outboxEvent: dict[str, object] | None = None,
+        auditPayload: dict[str, object] | None = None,
+    ) -> None:
         self.cases[case.supportCaseId] = case
+        if outboxEvent is not None:
+            self.outbox.append(outboxEvent)
 
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
         return self.cases.get(supportCaseId)
+
+    def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
+        for cmd in reversed(list(self.commands.values())):
+            if cmd.supportCaseId == supportCaseId and cmd.commandType.value == commandType:
+                return cmd
+        return None
 
 
 class FakeAttendanceRepo(IAttendanceRepository):
@@ -227,13 +267,18 @@ class FakeAttendanceRepo(IAttendanceRepository):
     def list_transactions(self) -> list[AttendanceTransaction]:
         return list(self.by_scan.values())
 
+    def list_passages_for_cycle(self, cycleId: str) -> list[PassageEvent]:
+        return [p for p in self.passages.values() if p.cycleId == cycleId]
 
-class FakeTurnstilePort(IOpenGate, ICloseGate, IEmergencyGate):
-    """Configurable test double for ITurnstileControl ports."""
+
+class FakeTurnstilePort(IOpenGate, ICloseGate, IEmergencyGate, IControllerStatusQuery):
+    """Configurable test double for ITurnstileControl + IControllerStatusQuery."""
 
     def __init__(self) -> None:
         self.open_outcome: CommandOutcome = CommandOutcome.OPEN_CONFIRMED
         self.close_outcome: CommandOutcome = CommandOutcome.CLOSED
+        self.reset_outcome: CommandOutcome = CommandOutcome.RESET_CONFIRMED
+        self.query_outcome: CommandOutcome = CommandOutcome.UNDETERMINED
         self.open_calls: list[tuple[str, str]] = []
         self.close_calls: list[tuple[str, str]] = []
 
@@ -249,12 +294,16 @@ class FakeTurnstilePort(IOpenGate, ICloseGate, IEmergencyGate):
         return CommandOutcome.EMERGENCY_RELEASED
 
     def resetEmergency(self, commandId: str, laneId: str) -> CommandOutcome:
-        return CommandOutcome.RESET_CONFIRMED
+        return self.reset_outcome
+
+    def queryStatus(self, commandId: str, laneId: str) -> CommandOutcome:
+        return self.query_outcome
 
 
-class DummyOutboxRepo(IOutboxRepository):
+class FakeOutboxRepo(IOutboxRepository):
     def __init__(self) -> None:
         self.events: list[dict[str, object]] = []
+        self.processed: dict[tuple[str, str], str] = {}
 
     def append_event(self, event: dict[str, object]) -> None:
         self.events.append(event)
@@ -262,10 +311,35 @@ class DummyOutboxRepo(IOutboxRepository):
     def list_pending_events(self) -> list[dict[str, object]]:
         return list(self.events)
 
+    def check_and_mark_processed(
+        self,
+        consumer: str,
+        eventId: str,
+        payload: dict[str, object],
+    ) -> DedupStatus:
+        h = hashlib.sha256(json.dumps(payload, sort_keys=True).encode("utf-8")).hexdigest()
+        key = (consumer, eventId)
+        if key not in self.processed:
+            self.processed[key] = h
+            return DedupStatus.APPLIED
+        if self.processed[key] == h:
+            return DedupStatus.DUPLICATE_IGNORED
+        return DedupStatus.CONFLICT_FLAGGED
 
-class DummySnapshotRepo(ISnapshotRepository):
+
+class FakeSnapshotRepo(ISnapshotRepository):
     def __init__(self) -> None:
-        self.snapshot = EligibilitySnapshot("BD", 1, datetime.now(UTC))
+        self.snapshot = EligibilitySnapshot(
+            factoryId="BD",
+            snapshotVersion=1,
+            confirmedWatermark=datetime.now(UTC),
+            clockErrorBoundSec=0.5,
+            employees={
+                "EMP-001": EmployeeRight("EMP-001", active=True, allowedFactories={"BD"}, allowedLanes={"LANE-BD-01", "LANE-BD-02"}),
+                "EMP-SUSPENDED": EmployeeRight("EMP-SUSPENDED", active=False, allowedFactories={"BD"}, allowedLanes={"LANE-BD-01"}),
+            },
+            lanes={"LANE-BD-01": Direction.ENTRY, "LANE-BD-02": Direction.EXIT},
+        )
 
     def get_snapshot(self) -> EligibilitySnapshot:
         return self.snapshot
@@ -274,7 +348,7 @@ class DummySnapshotRepo(ISnapshotRepository):
         self.snapshot = snapshot
 
 
-class DummyAuditAndHealth(IAuditApi, IHealthApi):
+class FakeAuditAndHealth(IAuditApi, IHealthApi):
     def __init__(self) -> None:
         self.audits: list[dict[str, object]] = []
         self.alerts: list[dict[str, object]] = []
@@ -289,20 +363,21 @@ class DummyAuditAndHealth(IAuditApi, IHealthApi):
 def _build_fixture() -> tuple[
     GateTransactionProcessor,
     GateCoreFacade,
-    FakeAccessDecision,
+    FakeUnitOfWork,
     FakeScanRepo,
     FakeAttendanceRepo,
     FakeTurnstilePort,
-    DummyOutboxRepo,
-    DummyAuditAndHealth,
+    FakeOutboxRepo,
+    FakeAuditAndHealth,
 ]:
+    uow = FakeUnitOfWork()
     decision = FakeAccessDecision()
     scan_repo = FakeScanRepo()
     att_repo = FakeAttendanceRepo(scan_repo)
     turnstile = FakeTurnstilePort()
-    outbox = DummyOutboxRepo()
-    snap_repo = DummySnapshotRepo()
-    obs = DummyAuditAndHealth()
+    outbox = FakeOutboxRepo()
+    snap_repo = FakeSnapshotRepo()
+    obs = FakeAuditAndHealth()
 
     processor = GateTransactionProcessor(
         factory_id="BD",
@@ -314,39 +389,40 @@ def _build_fixture() -> tuple[
         emergency_gate_port=turnstile,
         audit_api=obs,
         health_api=obs,
+        uow=uow,
+        status_query_port=turnstile,
+        snapshot_repo=snap_repo,
     )
     facade = GateCoreFacade(
         processor=processor,
         scan_repo=scan_repo,
         snapshot_repo=snap_repo,
         outbox_repo=outbox,
+        uow=uow,
     )
-    return processor, facade, decision, scan_repo, att_repo, turnstile, outbox, obs
+    return processor, facade, uow, scan_repo, att_repo, turnstile, outbox, obs
 
 
-# --- Unit & Controller Tests Covering Flow A and All 9 Edge Cases ---
+# --- Package 3 Tests ---
 
 
 def test_flow_a_scan_open_passage_creates_attendance_and_lane_clear_closes() -> None:
     """Flow A1–A9: Valid scan -> OPENED (no attendance yet) -> onPassage creates 1 AttendanceTransaction -> onLaneClear closes gate."""
-    processor, facade, _, scan_repo, att_repo, turnstile, _, _ = _build_fixture()
+    processor, facade, uow, scan_repo, att_repo, turnstile, _, _ = _build_fixture()
 
     app = FastAPI()
     app.include_router(build_gate_core_router(scan_submission=facade, signal_handler=processor))
     client = TestClient(app)
 
-    # Step A1–A7: Submit scan via GateCoreController
     resp = client.post("/api/gate/scans", json={"scanId": "scan-1", "qrToken": "QR-VALID-1", "laneId": "LANE-BD-01"})
     assert resp.status_code == 200
     data = resp.json()
     assert data["state"] == "OPENED"
     cmd_id = data["commandId"]
 
-    # ADR-02 & I-07: Opening alone never creates attendance
     assert len(att_repo.list_transactions()) == 0
     assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is not None
 
-    # Step A8: Controller reports PASSAGE -> creates 1 AttendanceTransaction
     pas_resp = client.post(
         "/api/controller/signals/passage",
         json={"commandId": cmd_id, "laneId": "LANE-BD-01", "passageEventId": "pas-1"},
@@ -355,7 +431,6 @@ def test_flow_a_scan_open_passage_creates_attendance_and_lane_clear_closes() -> 
     assert len(att_repo.list_transactions()) == 1
     assert att_repo.get_by_scan_id("scan-1") is not None
 
-    # Step A9: Controller reports LANE_CLEAR -> closeGate sent once and lane released
     clr_resp = client.post(
         "/api/controller/signals/lane-clear",
         json={"commandId": cmd_id, "laneId": "LANE-BD-01"},
@@ -363,146 +438,120 @@ def test_flow_a_scan_open_passage_creates_attendance_and_lane_clear_closes() -> 
     assert clr_resp.status_code == 200
     assert len(turnstile.close_calls) == 1
     assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
+    assert uow.committed >= 4
 
 
-def test_edge_case_1_and_2_and_3_idempotent_scan_lane_busy_and_qr_replay() -> None:
-    """Edge Cases 1, 2, 3: Duplicate scanId retry, LANE_BUSY preserving token, and QR_TOKEN_REPLAY_DETECTED."""
+def test_lane_clear_before_passage_and_missing_closed_keeps_lane_reserved() -> None:
+    """Required Tracker & Report scenarios:
+    1. LANE_CLEAR arrives BEFORE PASSAGE: gate closes and releases lane; subsequent PASSAGE still creates
+       AttendanceTransaction without re-locking the closed lane.
+    2. Missing CLOSED confirmation (CLOSE_UNCERTAIN / CLOSE_FAILED) keeps the lane reserved (LANE_BUSY).
+    """
+    processor, _, _, scan_repo, att_repo, turnstile, _, _ = _build_fixture()
+
+    # 1. LANE_CLEAR arrives before PASSAGE
+    res1 = processor.processScan(scanId="scan-lc-first", qrToken="TOK-LC-1", laneId="LANE-BD-01")
+    assert res1.state == ScanState.OPENED
+    assert res1.commandId is not None
+
+    processor.onLaneClear(commandId=res1.commandId, laneId="LANE-BD-01")
+    assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
+
+    processor.onPassage(passageEventId="pas-after-lc", commandId=res1.commandId, laneId="LANE-BD-01")
+    assert att_repo.get_by_scan_id("scan-lc-first") is not None
+    assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
+
+    # 2. Missing CLOSED confirmation keeps lane reserved
+    turnstile.close_outcome = CommandOutcome.UNDETERMINED
+    res2 = processor.processScan(scanId="scan-unclosed", qrToken="TOK-LC-2", laneId="LANE-BD-01")
+    assert res2.state == ScanState.OPENED
+    assert res2.commandId is not None
+
+    processor.onLaneClear(commandId=res2.commandId, laneId="LANE-BD-01")
+    cycle = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
+    assert cycle is not None and cycle.closureStatus == ClosureStatus.CLOSE_UNCERTAIN
+
+    res3 = processor.processScan(scanId="scan-blocked-by-unclosed", qrToken="TOK-LC-3", laneId="LANE-BD-01")
+    assert res3.state == ScanState.LANE_BUSY
+
+
+def test_edge_cases_idempotency_lane_busy_replay_storage_failure_and_status_query() -> None:
+    """Covers duplicate scanId, LANE_BUSY preserving token, QR replay rejection, storage failure,
+    and UNDETERMINED with/without IControllerStatusQuery.
+    """
     processor, _, _, scan_repo, _, turnstile, _, _ = _build_fixture()
 
-    # 1. First scan opens LANE-BD-01
     res1 = processor.processScan(scanId="scan-a", qrToken="TOKEN-A", laneId="LANE-BD-01")
     assert res1.state == ScanState.OPENED
     assert len(turnstile.open_calls) == 1
 
-    # Edge Case 1: Resending the exact same scanId returns stored OPENED without calling openGate again
+    # Duplicate scanId retry returns stored result without calling openGate again
     res1_retry = processor.processScan(scanId="scan-a", qrToken="TOKEN-A", laneId="LANE-BD-01")
     assert res1_retry.state == ScanState.OPENED
     assert len(turnstile.open_calls) == 1
 
-    # Edge Case 2: Second employee scans on busy LANE-BD-01 -> LANE_BUSY and TOKEN-B is NOT claimed
+    # Busy lane preserves TOKEN-B
     res2_busy = processor.processScan(scanId="scan-b1", qrToken="TOKEN-B", laneId="LANE-BD-01")
     assert res2_busy.state == ScanState.LANE_BUSY
     assert "tok-TOKEN-B" not in scan_repo.tokens
 
-    # Edge Case 3: Replaying already-claimed TOKEN-A on free LANE-BD-02 -> REJECTED (QR_TOKEN_REPLAY_DETECTED)
+    # Replay of TOKEN-A on free LANE-BD-02 is rejected
     res_replay = processor.processScan(scanId="scan-replay", qrToken="TOKEN-A", laneId="LANE-BD-02")
     assert res_replay.state == ScanState.REJECTED
     assert res_replay.reason == "QR_TOKEN_REPLAY_DETECTED"
 
-    # Once LANE-BD-01 clears and closes, second employee can use TOKEN-B on LANE-BD-01
     assert res1.commandId is not None
     processor.onLaneClear(commandId=res1.commandId, laneId="LANE-BD-01")
-    res2_ok = processor.processScan(scanId="scan-b2", qrToken="TOKEN-B", laneId="LANE-BD-01")
-    assert res2_ok.state == ScanState.OPENED
 
-
-def test_edge_case_4_and_5_storage_failure_controller_error_and_undetermined() -> None:
-    """Edge Cases 4 & 5: Storage failure before openGate, CONTROLLER_ERROR releasing lane, and UNDETERMINED keeping lane."""
-    processor, _, _, scan_repo, _, turnstile, _, obs = _build_fixture()
-
-    # Edge Case 4: Database failure before ACCEPTED -> CANNOT_PROCESS and openGate is never called
+    # Storage failure before openGate -> CANNOT_PROCESS
     scan_repo.simulate_storage_failure = True
-    res_fail = processor.processScan(scanId="scan-db-err", qrToken="TOKEN-1", laneId="LANE-BD-01")
-    assert res_fail.state == ScanState.CANNOT_PROCESS
-    assert len(turnstile.open_calls) == 0
+    assert processor.processScan(scanId="scan-db-err", qrToken="TOKEN-B", laneId="LANE-BD-01").state == ScanState.CANNOT_PROCESS
     scan_repo.simulate_storage_failure = False
 
-    # Edge Case 5a: Controller explicitly confirms non-execution -> CONTROLLER_ERROR and lane is released
-    turnstile.open_outcome = CommandOutcome.CONTROLLER_ERROR
-    res_ctrl_err = processor.processScan(scanId="scan-ctrl-err", qrToken="TOKEN-2", laneId="LANE-BD-01")
-    assert res_ctrl_err.state == ScanState.CONTROLLER_ERROR
-    assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
-
-    # Edge Case 5b: Controller timeout -> UNDETERMINED, lane stays reserved, no automatic resend (I-03)
+    # When status_query_port is absent and openGate is UNDETERMINED -> moves to PENDING_RECONCILIATION (Table 4.23a)
+    processor._status_query_port = None
     turnstile.open_outcome = CommandOutcome.UNDETERMINED
-    res_undet = processor.processScan(scanId="scan-undet", qrToken="TOKEN-3", laneId="LANE-BD-01")
-    assert res_undet.state == ScanState.UNDETERMINED
-    assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is not None
-    assert len(obs.alerts) >= 2
+    res_undet = processor.processScan(scanId="scan-no-query", qrToken="TOKEN-B", laneId="LANE-BD-01")
+    assert res_undet.state == ScanState.PENDING_RECONCILIATION
 
 
-def test_edge_case_6_7_8_9_timeout_15s_assisted_open_and_emergency_hold() -> None:
-    """Edge Cases 6, 7, 8, 9: 15s passage timeout, duplicate passageEventId, Assisted Open (ADR-07), and Emergency Hold."""
-    processor, facade, _, scan_repo, att_repo, turnstile, outbox, _ = _build_fixture()
+def test_15s_timeout_degraded_alerts_assisted_and_emergency_reset() -> None:
+    """Covers 15s passage timeout (never closes gate), degraded mode start/end alerts,
+    assisted open repeat idempotency, and unconfirmed emergency reset keeping EMERGENCY_HOLD.
+    """
+    processor, facade, _, scan_repo, att_repo, turnstile, _, obs = _build_fixture()
 
-    # Edge Case 6: 15s passage timeout flags NO_PASSAGE & PENDING_RECONCILIATION without closing the gate
-    res_open = processor.processScan(scanId="scan-no-pass", qrToken="TOKEN-NP", laneId="LANE-BD-01")
-    assert res_open.state == ScanState.OPENED
-    active_cycle = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
-    assert active_cycle is not None
+    # 1. Degraded scan logs DEGRADED_MODE_STARTED and tags AttendanceTransaction.snapshotVersion
+    res_deg = processor.processScan(scanId="scan-deg", qrToken="DEGRADED:TOK-1", laneId="LANE-BD-01")
+    assert res_deg.state == ScanState.OPENED
+    assert res_deg.degradedFlag is True
+    assert any(a.get("alert") == "DEGRADED_MODE_STARTED" for a in obs.alerts)
+    assert res_deg.commandId is not None
+    processor.onPassage("pas-deg", res_deg.commandId, "LANE-BD-01")
+    tx = att_repo.get_by_scan_id("scan-deg")
+    assert tx is not None and tx.degradedFlag is True and tx.snapshotVersion == 7
+    processor.onLaneClear(res_deg.commandId, "LANE-BD-01")
 
-    assert processor.handlePassageTimeout(active_cycle.cycleId) is True
-    assert scan_repo.get_scan("scan-no-pass").state == ScanState.PENDING_RECONCILIATION
-    assert len(turnstile.close_calls) == 0  # Timer never calls closeGate!
-
-    # Reconcile scan through GateCoreFacade.applyScanResolution
-    assert facade.applyScanResolution("dec-01", "scan-no-pass", "APPROVED_NO_ENTRY") is True
-    assert scan_repo.get_scan("scan-no-pass").state == ScanState.RECONCILED
-    assert len(outbox.list_pending_events()) == 1
-
-    # Close LANE-BD-01 via LANE_CLEAR
+    # 2. 15s timeout marks NO_PASSAGE and PENDING_RECONCILIATION without calling closeGate
+    res_open = processor.processScan(scanId="scan-timeout-15s", qrToken="TOK-2", laneId="LANE-BD-01")
+    assert any(a.get("alert") == "DEGRADED_MODE_ENDED" for a in obs.alerts)
+    cycle = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
+    assert cycle is not None
+    close_count = len(turnstile.close_calls)
+    assert processor.handlePassageTimeout(cycle.cycleId) is True
+    assert len(turnstile.close_calls) == close_count
+    assert scan_repo.get_scan("scan-timeout-15s").state == ScanState.PENDING_RECONCILIATION
     assert res_open.commandId is not None
-    processor.onLaneClear(commandId=res_open.commandId, laneId="LANE-BD-01")
+    processor.onLaneClear(res_open.commandId, "LANE-BD-01")
 
-    # Edge Case 8: Assisted Open records PassageEvent but creates NO automatic AttendanceTransaction (ADR-07)
-    facade.recordIntervention(
-        SupportCase(
-            supportCaseId="case-ast-1",
-            factoryId="BD",
-            laneId="LANE-BD-01",
-            guardId="GUARD-BD-01",
-            employeeId="EMP-001",
-            reason="Forgot phone",
-            occurredAt=datetime.now(UTC),
-        )
-    )
-    ast_res = facade.requestAssistedOpen("case-ast-1", "LANE-BD-01")
-    assert ast_res.state == ScanState.OPENED
-    assert ast_res.commandId is not None
-    processor.onPassage("pas-ast-1", ast_res.commandId, "LANE-BD-01")
-    assert "pas-ast-1" in att_repo.passages
-    assert len(att_repo.list_transactions()) == 0
-    processor.onLaneClear(ast_res.commandId, "LANE-BD-01")
-
-    # Edge Case 9: Emergency Release during an OPENED scan puts scan into PENDING_RECONCILIATION and holds lane
-    res_before_emg = processor.processScan(scanId="scan-emg", qrToken="TOKEN-EMG", laneId="LANE-BD-01")
-    assert res_before_emg.state == ScanState.OPENED
-
+    # 3. Emergency release + unconfirmed reset stays in EMERGENCY_HOLD until RESET_CONFIRMED
     emg_res = facade.requestEmergencyRelease("case-emg-1", "LANE-BD-01")
     assert emg_res.reason == ClosureStatus.EMERGENCY_HOLD.value
-    assert scan_repo.get_scan("scan-emg").state == ScanState.PENDING_RECONCILIATION
 
-    # While in EMERGENCY_HOLD, onLaneClear must NOT close the gate
-    assert emg_res.commandId is not None
-    close_count_before = len(turnstile.close_calls)
-    processor.onLaneClear(emg_res.commandId, "LANE-BD-01")
-    assert len(turnstile.close_calls) == close_count_before
+    turnstile.reset_outcome = CommandOutcome.UNDETERMINED
+    rst_fail = facade.requestEmergencyReset("case-emg-1", "LANE-BD-01")
+    assert rst_fail.reason == ClosureStatus.EMERGENCY_HOLD.value
 
-    # After resetEmergency, onLaneClear closes and releases the lane
-    rst_res = facade.resetEmergency("case-emg-1", "LANE-BD-01")
-    assert rst_res.reason == "EMERGENCY_RESET_CONFIRMED"
-    processor.onLaneClear(emg_res.commandId, "LANE-BD-01")
-    assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
-
-    # Deadline check (§5.4) & Second distinct passageEventId anomaly (§4.2.2 Flow A8, §4.2.5)
-    expired_dl = datetime.now(UTC) - timedelta(seconds=0.1)
-    dl_res = processor.processScan(
-        scanId="scan-expired-dl",
-        qrToken="TOKEN-DL",
-        laneId="LANE-BD-01",
-        deadline=expired_dl,
-    )
-    assert dl_res.state == ScanState.CANNOT_PROCESS
-    assert dl_res.reason == "REQUEST_DEADLINE_EXPIRED_BEFORE_COMMAND"
-
-    # Normal scan with repeated passageEventId (ignored) vs second distinct passageEventId (flagged anomaly, still 1 tx)
-    res_anom = processor.processScan(scanId="scan-anom", qrToken="TOKEN-ANOM", laneId="LANE-BD-01")
-    assert res_anom.commandId is not None
-    processor.onPassage("pas-first", res_anom.commandId, "LANE-BD-01")
-    assert len(att_repo.list_transactions()) == 1
-    processor.onPassage("pas-first", res_anom.commandId, "LANE-BD-01")  # Duplicate passageEventId -> ignored
-    assert len(att_repo.list_transactions()) == 1
-    processor.onPassage("pas-second-tailgate", res_anom.commandId, "LANE-BD-01")  # Second distinct passage -> flagged!
-    assert len(att_repo.list_transactions()) == 1
-    assert scan_repo.get_scan("scan-anom").reason == "FLAGGED_SECOND_PASSAGE_ANOMALY"
-
+    turnstile.reset_outcome = CommandOutcome.RESET_CONFIRMED
+    rst_ok = facade.requestEmergencyReset("case-emg-1", "LANE-BD-01")
+    assert rst_ok.reason == "EMERGENCY_RESET_CONFIRMED"

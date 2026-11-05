@@ -15,6 +15,7 @@ from tmc_gate.ports.inbound import (
 )
 from tmc_gate.ports.turnstile import (
     ICloseGate,
+    IControllerStatusQuery,
     IEmergencyGate,
     IOpenGate,
     IPassageEvents,
@@ -89,8 +90,15 @@ def test_interface_segregation_principle_contracts() -> None:
     assert "submitScan" in kiosk_methods
     assert "getScanStatus" in kiosk_methods
     assert "requestEmergencyRelease" not in kiosk_methods
+    assert "requestEmergencyReset" not in kiosk_methods
     assert "recordIntervention" not in kiosk_methods
     assert "applyEligibilityChanges" not in kiosk_methods
+
+    assert "requestEmergencyReset" in set(dir(IInterventionRequest))
+
+    # IPassageEvents has ONLY onPassage and onLaneClear (§7.1.4)
+    passage_methods = {m for m in dir(IPassageEvents) if not m.startswith("_")}
+    assert passage_methods == {"onPassage", "onLaneClear"}
 
     assert issubclass(GateCoreApi, IScanSubmission)
     assert issubclass(GateCoreApi, IInterventionRequest)
@@ -100,3 +108,4 @@ def test_interface_segregation_principle_contracts() -> None:
     assert issubclass(ITurnstileControl, ICloseGate)
     assert issubclass(ITurnstileControl, IEmergencyGate)
     assert not issubclass(ITurnstileControl, IPassageEvents)
+    assert not issubclass(ITurnstileControl, IControllerStatusQuery)

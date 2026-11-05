@@ -1,7 +1,14 @@
-"""Repository and cross-cutting port interfaces owned/used by M1 Gate Core (Figure 4.2, Table 4.7)."""
+"""Unit of Work, Repository, and Cross-cutting port interfaces owned/used by M1 Gate Core (Figure 4.2, Table 4.7).
+
+Transaction rule:
+- IUnitOfWork owns begin(), commit(), and rollback() (and context-manager protocol `__enter__`/`__exit__`).
+- Repositories receive the shared transaction context of IUnitOfWork and NEVER open or commit transactions on their own.
+"""
 
 from abc import ABC, abstractmethod
+from types import TracebackType
 
+from tmc_gate.domain.enums import DedupStatus
 from tmc_gate.domain.models import (
     AttendanceTransaction,
     GateCommand,
@@ -15,6 +22,35 @@ from tmc_gate.domain.models import (
 from tmc_gate.domain.snapshot import EligibilitySnapshot
 
 
+class IUnitOfWork(ABC):
+    """Transaction boundary coordinator shared across repositories (ADR-02, ADR-05)."""
+
+    @abstractmethod
+    def begin(self, timeout_ms: int | None = None) -> None:
+        """Start an atomic transaction (e.g., BEGIN IMMEDIATE with busy_timeout set from remaining deadline)."""
+
+    @abstractmethod
+    def commit(self) -> None:
+        """Commit the current transaction."""
+
+    @abstractmethod
+    def rollback(self) -> None:
+        """Roll back the current transaction."""
+
+    def __enter__(self) -> "IUnitOfWork":
+        self.begin()
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        if exc_type is not None:
+            self.rollback()
+
+
 class IScanRepository(ABC):
     """Persistence contract for scan states, active lane cycles, token claims, and controller commands."""
 
@@ -24,7 +60,7 @@ class IScanRepository(ABC):
 
     @abstractmethod
     def save_scan(self, scan: ScanAttempt, audit_payload: dict[str, object] | None = None) -> None:
-        """Persist a non-opening scan state (e.g., REJECTED, CANNOT_PROCESS) with local audit evidence."""
+        """Stage a ScanAttempt (and optional local audit evidence) within the current UnitOfWork transaction."""
 
     @abstractmethod
     def get_lane(self, laneId: str) -> Lane | None:
@@ -41,14 +77,15 @@ class IScanRepository(ABC):
         reservation: TokenReservation,
         cycle: GateCycle,
         command: GateCommand,
+        timeout_ms: int | None = None,
     ) -> tuple[bool, str]:
-        """Atomically reserve the lane, claim tokenId, and store ACCEPTED in one transaction (ADR-02, Flow A4).
+        """Reserve the lane, claim tokenId, and stage ACCEPTED scan & GateCommand inside one short transaction (ADR-02, Flow A4).
 
         Returns:
-            (True, "ACCEPTED") if committed.
+            (True, "ACCEPTED") if staged/committed.
             (False, "LANE_BUSY") if the lane already has an active or unresolved GateCycle (token is NOT claimed).
             (False, "TOKEN_ALREADY_CLAIMED") if tokenId was already claimed at this factory.
-            (False, "STORAGE_FAILURE") if durable persistence fails.
+            (False, "STORAGE_FAILURE") if busy_timeout expires or durable persistence fails.
         """
 
     @abstractmethod
@@ -63,7 +100,7 @@ class IScanRepository(ABC):
         outboxEvent: dict[str, object] | None = None,
         auditPayload: dict[str, object] | None = None,
     ) -> None:
-        """Persist OPENED, CONTROLLER_ERROR, or UNDETERMINED outcome together with audit and outbox data."""
+        """Stage OPENED, CONTROLLER_ERROR, or UNDETERMINED outcome together with audit and outbox data."""
 
     @abstractmethod
     def get_cycle_by_command(self, commandId: str) -> GateCycle | None:
@@ -80,15 +117,24 @@ class IScanRepository(ABC):
         releaseLane: bool = False,
         command: GateCommand | None = None,
     ) -> None:
-        """Persist updated passageStatus or closureStatus on a GateCycle (and optional GateCommand)."""
+        """Stage updated passageStatus or closureStatus on a GateCycle (and optional GateCommand)."""
 
     @abstractmethod
-    def save_support_case(self, case: SupportCase) -> None:
-        """Persist an assisted access or emergency SupportCase."""
+    def save_support_case(
+        self,
+        case: SupportCase,
+        outboxEvent: dict[str, object] | None = None,
+        auditPayload: dict[str, object] | None = None,
+    ) -> None:
+        """Stage an assisted access or emergency SupportCase with audit evidence and outbox event (Flow B4)."""
 
     @abstractmethod
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
         """Retrieve a stored SupportCase by supportCaseId."""
+
+    def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
+        """Find a previously issued GateCommand for a supportCaseId (to handle repeated requestAssistedOpen idempotently per §4.2.3)."""
+        return None
 
 
 class IAttendanceRepository(ABC):
@@ -103,8 +149,8 @@ class IAttendanceRepository(ABC):
         outboxEvent: dict[str, object],
         auditPayload: dict[str, object],
     ) -> bool:
-        """Atomically store PassageEvent, at most one original AttendanceTransaction per scanId,
-        audit evidence, and outbox event in one write (Flow A8, ADR-02).
+        """Stage PassageEvent (1 GateCycle -> 0..* PassageEvent), at most one original AttendanceTransaction per scanId,
+        audit evidence, and OutboxEvent within the current UnitOfWork transaction (Flow A8, ADR-02).
         """
 
     @abstractmethod
@@ -115,17 +161,34 @@ class IAttendanceRepository(ABC):
     def list_transactions(self) -> list[AttendanceTransaction]:
         """Return all stored factory attendance transactions."""
 
+    def list_passages_for_cycle(self, cycleId: str) -> list[PassageEvent]:
+        """Return all PassageEvents recorded for a GateCycle (1 -> 0..* multiplicity)."""
+        return []
+
 
 class IOutboxRepository(ABC):
-    """Persistence contract for transactional outbox events destined for Gate Event Feed (Table 4.7, ADR-05)."""
+    """Persistence contract for transactional outbox events and (consumer, eventId) deduplication (Table 4.7, ADR-05)."""
 
     @abstractmethod
     def append_event(self, event: dict[str, object]) -> None:
-        """Store an outgoing event in the factory outbox."""
+        """Stage an outgoing event in the factory outbox within the current UnitOfWork transaction."""
 
     @abstractmethod
     def list_pending_events(self) -> list[dict[str, object]]:
         """Return all committed outbox events waiting to be relayed by Site Sync."""
+
+    def check_and_mark_processed(
+        self,
+        consumer: str,
+        eventId: str,
+        payload: dict[str, object],
+    ) -> DedupStatus:
+        """Record (consumer, eventId) in the current transaction (ADR-05):
+        - First time -> DedupStatus.APPLIED
+        - Same (consumer, eventId) with identical payload -> DedupStatus.DUPLICATE_IGNORED
+        - Same (consumer, eventId) with different payload -> DedupStatus.CONFLICT_FLAGGED
+        """
+        return DedupStatus.APPLIED
 
 
 class ISnapshotRepository(ABC):

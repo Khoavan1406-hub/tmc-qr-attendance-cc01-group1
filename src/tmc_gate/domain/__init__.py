@@ -7,6 +7,7 @@ from tmc_gate.domain.enums import (
     ClosureStatus,
     CommandOutcome,
     CommandType,
+    DedupStatus,
     Direction,
     OperatingMode,
     PassageStatus,

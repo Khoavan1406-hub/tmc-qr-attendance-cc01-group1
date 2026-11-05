@@ -73,3 +73,11 @@ class CommandOutcome(StrEnum):
     RESET_CONFIRMED = "RESET_CONFIRMED"
     CONTROLLER_ERROR = "CONTROLLER_ERROR"
     UNDETERMINED = "UNDETERMINED"
+
+
+class DedupStatus(StrEnum):
+    """Inbound event deduplication outcomes keyed by (consumer, eventId) (ADR-05)."""
+
+    APPLIED = "APPLIED"
+    DUPLICATE_IGNORED = "DUPLICATE_IGNORED"
+    CONFLICT_FLAGGED = "CONFLICT_FLAGGED"
