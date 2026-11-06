@@ -229,6 +229,12 @@ class FakeScanRepo(IScanRepository):
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
         return self.cases.get(supportCaseId)
 
+    def get_command(self, commandId: str) -> GateCommand | None:
+        return self.commands.get(commandId)
+
+    def save_command(self, command: GateCommand) -> None:
+        self.commands[command.commandId] = command
+
     def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
         for cmd in reversed(list(self.commands.values())):
             if cmd.supportCaseId == supportCaseId and cmd.commandType.value == commandType:

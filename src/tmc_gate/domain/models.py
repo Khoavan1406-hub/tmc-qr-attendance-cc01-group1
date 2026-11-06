@@ -107,6 +107,7 @@ class PassageEvent:
     cycleId: str
     laneId: str
     occurredAt: datetime
+    reviewReason: str | None = None  # "LATE_PASSAGE" when kept for review without attendance (Table 4.23b)
 
 
 @dataclass
