@@ -708,28 +708,47 @@ class GateTransactionProcessor(IPassageEvents):
     # --- Flow B: Assisted & Emergency operations called via GateCoreFacade ---
 
     def recordIntervention(self, case: SupportCase) -> bool:
-        """Store an authorized support case, audit evidence, and an outbox event in Gate Core (Flow B4, p. 65)."""
+        """Store an authorized support case, audit evidence, and an outbox event in Gate Core (Flow B4, p. 65).
+
+        A supportCaseId is written once. Resending the same case is accepted without a new write; a different
+        case under an existing supportCaseId returns False and keeps the original evidence.
+        """
+        conflict = False
         with self._uow:
-            self._scan_repo.save_support_case(
-                case,
-                outboxEvent={
-                    "eventId": f"evt-case-{case.supportCaseId}",
-                    "eventType": "SUPPORT_CASE_RECORDED",
-                    "supportCaseId": case.supportCaseId,
-                    "factoryId": case.factoryId,
-                    "laneId": case.laneId,
-                    "employeeId": case.employeeId,
-                    "isEmergency": case.isEmergency,
-                },
-                auditPayload={
-                    "action": "SUPPORT_CASE_RECORDED",
-                    "supportCaseId": case.supportCaseId,
-                    "guardId": case.guardId,
-                    "laneId": case.laneId,
-                    "isEmergency": case.isEmergency,
-                },
-            )
-            self._uow.commit()
+            existing = self._scan_repo.get_support_case(case.supportCaseId)
+            if existing is not None:
+                if _same_support_case(existing, case):
+                    return True
+                conflict = True
+            else:
+                self._scan_repo.save_support_case(
+                    case,
+                    outboxEvent={
+                        "eventId": f"evt-case-{case.supportCaseId}",
+                        "eventType": "SUPPORT_CASE_RECORDED",
+                        "supportCaseId": case.supportCaseId,
+                        "factoryId": case.factoryId,
+                        "laneId": case.laneId,
+                        "employeeId": case.employeeId,
+                        "isEmergency": case.isEmergency,
+                    },
+                    auditPayload={
+                        "action": "SUPPORT_CASE_RECORDED",
+                        "supportCaseId": case.supportCaseId,
+                        "guardId": case.guardId,
+                        "laneId": case.laneId,
+                        "isEmergency": case.isEmergency,
+                    },
+                )
+                self._uow.commit()
+        if conflict:
+            self._audit_api.append_async({
+                "action": "SUPPORT_CASE_ID_CONFLICT",
+                "supportCaseId": case.supportCaseId,
+                "guardId": case.guardId,
+                "laneId": case.laneId,
+            })
+            return False
         return True
 
     def requestAssistedOpen(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
@@ -908,3 +927,9 @@ class GateTransactionProcessor(IPassageEvents):
             commandId=cmd_id,
             reason=ClosureStatus.EMERGENCY_HOLD.value,
         )
+
+
+def _same_support_case(stored: SupportCase, incoming: SupportCase) -> bool:
+    """A resend carries the same evidence; occurredAt may differ because the client stamps it again."""
+    keys = ("factoryId", "laneId", "guardId", "reason", "employeeId", "linkedScanId", "isEmergency")
+    return all(getattr(stored, key) == getattr(incoming, key) for key in keys)

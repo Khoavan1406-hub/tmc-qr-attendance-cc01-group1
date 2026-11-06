@@ -233,3 +233,14 @@ class IAuthorizationApi(ABC):
     @abstractmethod
     def is_authorized(self, actorId: str, role: str, action: str, factoryId: str) -> bool:
         """Verify whether the actor has server-side permission and scope for the requested operation."""
+
+
+class IGuardIdentityApi(ABC):
+    """Cross-cutting identity check: maps a server-verified guard session to a guardId (ADR-09).
+
+    M3 takes the acting guard from this port, never from the request body.
+    """
+
+    @abstractmethod
+    def resolve_guard(self, sessionToken: str) -> str | None:
+        """Return the guardId of a valid session, or None when the session is unknown or expired."""

@@ -9,6 +9,7 @@ from tmc_gate.adapters.cross_cutting_stubs import (
     InMemoryAuthorizationStub,
     InMemoryHealthStub,
 )
+from tmc_gate.adapters.demo_guard_sessions import DemoGuardSessionStub
 from tmc_gate.adapters.demo_qr_issuer import QrCredentialIssuance
 from tmc_gate.adapters.sqlite_repos import (
     SqliteAttendanceRepository,
@@ -156,7 +157,10 @@ def create_app(
 
     # Register Entry Layer Routers
     fastapi_app.include_router(build_gate_core_router(scan_submission=gate_core_facade, signal_handler=processor))
-    fastapi_app.include_router(build_intervention_router(facade=intervention_facade))
+    # Guard sign-in is simulated in M2 (fixed demo sessions); real identity provider is out of scope.
+    fastapi_app.include_router(
+        build_intervention_router(facade=intervention_facade, guard_identity=DemoGuardSessionStub())
+    )
     if demo_mode:
         fastapi_app.include_router(
             build_demo_router(

@@ -9,11 +9,15 @@ from fastapi.testclient import TestClient
 import pytest
 
 from test_pkg3_processor import _build_fixture
+from tmc_gate.adapters.demo_guard_sessions import DemoGuardSessionStub
 from tmc_gate.api.gate_controller import build_gate_core_router
 from tmc_gate.api.intervention_controller import build_intervention_router
 from tmc_gate.application.intervention import GateInterventionFacade, InterventionService
 from tmc_gate.domain.enums import ClosureStatus, CommandOutcome, ScanState
 from tmc_gate.ports.repositories import IAuthorizationApi
+
+BD_GUARD_SESSION = {"X-Guard-Session": "demo-session-guard-bd-01"}
+LA_GUARD_SESSION = {"X-Guard-Session": "demo-session-guard-la-01"}
 
 
 class StubAuthorizationApi(IAuthorizationApi):
@@ -56,7 +60,7 @@ def _build_pkg6_fixture() -> tuple[
 
     app = FastAPI()
     app.include_router(build_gate_core_router(scan_submission=facade, signal_handler=processor))
-    app.include_router(build_intervention_router(facade=intervention_facade))
+    app.include_router(build_intervention_router(facade=intervention_facade, guard_identity=DemoGuardSessionStub()))
     client = TestClient(app)
 
     return (
@@ -150,11 +154,26 @@ def test_assisted_access_requires_guard_authorization_and_creates_no_automatic_a
     assert scan_repo.get_active_cycle_for_lane("LANE-BD-01") is None
 
     # 7. Verification over HTTP controller endpoints
-    http_unauth = client.post(
+    # No guard session: rejected before M3 runs, even if the body names a valid guard.
+    http_anonymous = client.post(
         "/api/interventions/assisted-open",
         json={
+            "supportCaseId": "case-http-anon",
+            "guardId": "GUARD-BD-01",
+            "employeeId": "EMP-001",
+            "laneId": "LANE-BD-01",
+            "reason": "Test anonymous via HTTP",
+        },
+    )
+    assert http_anonymous.status_code == 401
+    assert scan_repo.get_support_case("case-http-anon") is None
+
+    # Signed-in guard of factory LA: authenticated but not authorized for BD.
+    http_unauth = client.post(
+        "/api/interventions/assisted-open",
+        headers=LA_GUARD_SESSION,
+        json={
             "supportCaseId": "case-http-unauth",
-            "guardId": "FAKE-GUARD",
             "employeeId": "EMP-001",
             "laneId": "LANE-BD-01",
             "reason": "Test unauth via HTTP",
@@ -166,9 +185,9 @@ def test_assisted_access_requires_guard_authorization_and_creates_no_automatic_a
 
     http_ok = client.post(
         "/api/interventions/assisted-open",
+        headers=BD_GUARD_SESSION,
         json={
             "supportCaseId": "case-http-ok",
-            "guardId": "GUARD-BD-01",
             "employeeId": "EMP-001",
             "laneId": "LANE-BD-01",
             "reason": "Screen broken",
@@ -283,11 +302,10 @@ def test_emergency_release_hold_blocks_scans_and_unconfirmed_reset_stays_in_hold
     turnstile.reset_outcome = CommandOutcome.RESET_CONFIRMED
     http_reset = client.post(
         "/api/interventions/emergency-reset",
+        headers=BD_GUARD_SESSION,
         json={
             "supportCaseId": "emg-valid-01",
-            "guardId": "GUARD-BD-01",
             "laneId": "LANE-BD-01",
-            "reason": "Fire extinguished and verified",
         },
     )
     assert http_reset.status_code == 200

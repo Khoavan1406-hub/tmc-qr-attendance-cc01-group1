@@ -43,9 +43,10 @@ Module **`M3 Gate Intervention`** chịu trách nhiệm điều phối các hàn
 
 ### B. Tầng Giao diện API (`src/tmc_gate/api/intervention_controller.py`)
 
+* Cả ba endpoint cần header `X-Guard-Session`; bảo vệ được xác định qua `IGuardIdentityApi` (`DemoGuardSessionStub` trong M2), không lấy từ body. Thiếu hoặc sai phiên trả HTTP 401.
 * `POST /api/interventions/assisted-open`: Nhận `AssistedAccessRequest` $\rightarrow$ Trả về kết quả mở hỗ trợ.
-* `POST /api/interventions/emergency-release`: Nhận `EmergencyActionRequest` $\rightarrow$ Kích hoạt `EMERGENCY_HOLD`.
-* `POST /api/interventions/emergency-reset`: Nhận `EmergencyActionRequest` $\rightarrow$ Thực hiện reset giải tỏa.
+* `POST /api/interventions/emergency-release`: Nhận `EmergencyReleaseRequest` $\rightarrow$ Kích hoạt `EMERGENCY_HOLD`.
+* `POST /api/interventions/emergency-reset`: Nhận `EmergencyResetRequest` $\rightarrow$ Thực hiện reset giải tỏa.
 
 ---
 

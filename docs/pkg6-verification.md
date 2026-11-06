@@ -14,7 +14,7 @@ source .venv/bin/activate       # Linux/macOS
 .venv\Scripts\Activate.ps1      # Windows PowerShell
 
 # Chạy riêng bộ kiểm thử Package 6
-pytest -v tests/test_pkg6_intervention.py
+pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py
 
 # Chạy bài kiểm tra kiến trúc SOLID (AST analysis)
 pytest -v tests/test_architecture_solid.py
@@ -27,14 +27,17 @@ pytest -v
 
 ## 2. Kết Quả Kiểm Thử Đã Ghi Nhận
 
+Chạy trên nhánh `feat/pkg6-intervention-tests` sau khi gộp `dev` (PR1 + PR2), Python 3.13.5. Tất cả test dưới đây dùng fake repository và fake controller; hành vi với SQLite thật chưa được kiểm chứng (chờ Package 4).
+
 | Phạm vi kiểm thử | Số ca test | Kết quả | Ghi chú |
 | :--- | :---: | :---: | :--- |
-| **Package 6 (M3 Intervention)** | 4 | **4 passed (100%)** | Bao phủ trọn vẹn Flow B, Scoped RBAC, và `EMERGENCY_HOLD` |
-| **Architectural Fitness (SOLID)** | 4 | **4 passed (100%)** | Xác nhận không có vi phạm phụ thuộc kiến trúc AST |
-| **Flow A E2E (Kiosk Lifecycle)** | 1 | **1 passed (100%)** | Luồng quét QR thông thường chạy thông suốt |
-| **Package 1 (Snapshot Rules)** | 146 | **146 passed (100%)** | Biên thời gian mili-giây và phân loại chế độ hoạt động |
-| **Package 3 (Gate Processor)** | 4 | **4 passed (100%)** | Vòng đời giao dịch nguyên tử và điều phối cổng |
-| **Toàn bộ Repository** | 165 | **159 passed, 6 skipped** | 6 test skip thuộc TODO của Pkg 2, 4, 5 đang chờ merge |
+| **Package 6 (M3 Intervention)** | 4 | 4 passed | Các nhánh chính của Flow B: phân quyền theo nhà máy, mở hỗ trợ không tạo chấm công, `EMERGENCY_HOLD` và reset. HR duyệt và Resolution Feed là giả lập |
+| **Package 6 – hồi quy review PR #8** | 15 | 15 passed | Phiên đăng nhập bảo vệ qua HTTP, hồ sơ không lưu được, `supportCaseId` dùng lại |
+| **Architectural Fitness (SOLID)** | 4 | 4 passed | Kiểm tra phụ thuộc giữa các tầng bằng AST |
+| **Flow A qua HTTP (fake ports)** | 1 | 1 passed | Chưa phải E2E với SQLite và adapter mô phỏng |
+| **Package 1 (Snapshot Rules)** | 146 | 146 passed | Biên thời gian mili-giây và phân loại chế độ hoạt động |
+| **Package 3 (Gate Processor)** | 37 | 37 passed | `test_pkg3_processor`, `test_pkg3_rules`, hai file hồi quy PR2 |
+| **Toàn bộ Repository** | 213 | **207 passed, 6 skipped** | 6 test skip thuộc TODO của Package 2, 4, 5 |
 
 ---
 
@@ -51,7 +54,8 @@ pytest -v
   * Mở cổng hỗ trợ **hoàn toàn không tạo bản ghi chấm công** (`len(attendance_repo.list_transactions()) == 0`).
   * Khi cảm biến gửi tiếp tín hiệu bước qua (`onPassage`), hệ thống **vẫn không tạo bản ghi chấm công** (chờ HR thẩm định ở trung tâm).
 * **Kiểm thử trên tầng API Controller:**
-  * Endpoint `POST /api/interventions/assisted-open` hoạt động đồng nhất qua HTTP client.
+  * Không có header `X-Guard-Session` thì trả HTTP 401, kể cả khi body ghi `guardId` hợp lệ.
+  * Phiên của bảo vệ Long An gọi tại Bình Dương bị từ chối `GUARD_UNAUTHORIZED`; phiên bảo vệ Bình Dương mở được cổng.
 
 ### Ca 2: `test_emergency_release_hold_blocks_scans_and_unconfirmed_reset_stays_in_hold`
 * **Kích hoạt khẩn cấp an toàn:**
@@ -72,3 +76,9 @@ pytest -v
 
 ### Ca 4: `test_emergency_reset_on_normal_lane_without_hold_is_rejected`
 * Gửi yêu cầu reset khẩn cấp trên một làn đang rỗi (không ở trạng thái `EMERGENCY_HOLD`) sẽ bị từ chối với lý do `LANE_NOT_IN_EMERGENCY_HOLD`.
+
+### Ca bổ sung: `test_pkg6_pr8_regressions.py` (review PR #8)
+* Ba endpoint `/api/interventions/*` từ chối request không có phiên đăng nhập; `guardId` trong body bị bỏ qua.
+* Khi Gate Core không lưu được `SupportCase` (`recordIntervention` trả `False`), M3 trả `SUPPORT_CASE_NOT_RECORDED` và không gửi lệnh mở hay mở khẩn cấp.
+* Dùng lại `supportCaseId` với nội dung khác (đổi nhân viên, hoặc đổi từ mở hỗ trợ sang khẩn cấp) bị từ chối và hồ sơ gốc giữ nguyên; gửi lại đúng nội dung thì trả về lệnh cũ, không mở cổng lần hai.
+* M3 dùng timeout mở hỗ trợ 3.000 ms và gọi `requestEmergencyReset`; reset chưa xác nhận vẫn giữ `EMERGENCY_HOLD`.

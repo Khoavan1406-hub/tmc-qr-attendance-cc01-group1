@@ -2,7 +2,8 @@
 
 Repository hiện thực hóa **Task 2 (Code Implementation)** của môn **Kiến trúc Phần mềm (HK261 – HCMUT)** cho hệ thống chấm công và kiểm soát ra vào bằng mã QR tại công ty sản xuất **TMC** (hai nhà máy Bình Dương và Long An).
 
-- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật và lưu trữ bền vững.
+- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật. Lưu trữ SQLite (Package 4) đang được hoàn thiện; các test hiện tại của M1/M3 chạy trên fake repository và fake controller.
+- **Trạng thái hiện tại:** Package 2, 4, 5 còn TODO, nên kịch bản demo Swagger ở mục 6 chỉ chạy được sau khi các package này được merge.
 - **Thành phần hỗ trợ demo:** Bộ cấp mã QR Ed25519 (một thành phần của `M4 QrCredentialIssuance`) và bộ mô phỏng cửa xoay `TurnstileAdapter` (`M2 Turnstile Integration`) chỉ kích hoạt ở chế độ demo (`demo_mode=True`).
 
 ---
@@ -29,13 +30,16 @@ Nhằm bám sát yêu cầu đề bài **Assignment M2** và các quyết địn
    * Ghi nhận giao dịch chấm công gốc (`AttendanceTransaction`) khi và chỉ khi nhận tín hiệu bước qua vật lý (`PassageEvent`).
    * Chế độ suy giảm giới hạn (Degraded mode) khi mất WAN: `NORMAL` ($\le 60s$), `DEGRADED` ($> 60s$ và $< 30m$), `CANNOT_PROCESS` ($\ge 30m$ hoặc sai số đồng hồ $\ge 2s$).
 2. **Module M3 Gate Intervention (Flow B – §4.2.3):**
+   * Xác định bảo vệ từ phiên đăng nhập (header `X-Guard-Session`, qua `IGuardIdentityApi`), không lấy `guardId` từ body; thiếu hoặc sai phiên trả HTTP 401.
    * Xác thực thẩm quyền bảo vệ phía server (`IAuthorizationApi` - Scoped RBAC theo nhà máy).
+   * Mỗi `supportCaseId` chỉ ghi một lần: gửi lại cùng nội dung được xử lý như lần gửi lại, khác nội dung thì bị từ chối (`SUPPORT_CASE_NOT_RECORDED`) và giữ hồ sơ gốc.
    * Mở cổng hỗ trợ (Assisted Open) khi công nhân gặp sự cố (quên/hỏng điện thoại): Ghi nhận `SupportCase`, **tuyệt đối không tạo bản ghi chấm công tự động** (tuân thủ nguyên tắc I-04, ADR-07).
    * Mở khẩn cấp (Emergency Release): Đưa làn vào trạng thái `EMERGENCY_HOLD`, khóa mọi lượt quét QR mới tại Kiosk.
    * Reset khẩn cấp: Chỉ cho phép thoát `EMERGENCY_HOLD` khi controller phản hồi xác nhận `RESET_CONFIRMED`.
 
 ### B. Ngoài phạm vi triển khai / Giả lập phục vụ Demo (Out-of-Scope / Simulated)
 * **Xác thực chấm công của HR:** Việc phê duyệt của HR đối với các trường hợp mở hỗ trợ và luồng giải quyết sai lệch (Resolution Feed) tại trung tâm là giả lập (**Flow B không gọi là E2E**).
+* **Đăng nhập của bảo vệ:** Phiên đăng nhập được mô phỏng bằng `DemoGuardSessionStub` với hai token cố định (`demo-session-guard-bd-01`, `demo-session-guard-la-01`). Xác thực thật thuộc hệ thống định danh trung tâm, nằm ngoài phạm vi M2.
 * **Đồng bộ qua mạng WAN:** Module `M9 Site Sync` chỉ tiếp nhận thay đổi snapshot và đọc outbox cục bộ; không triển khai đường truyền mạng vật lý WAN.
 * **Tính lương & Quản lý khách:** Quản lý khách vãng lai (Visitor Management) và tính toán bảng lương (Payroll Calculation) nằm ngoài phạm vi đồ án theo quy định của đề bài M2.
 
@@ -121,7 +125,7 @@ pytest -v
 pytest -v tests/test_architecture_solid.py
 
 # Chạy riêng kiểm thử Flow B Gate Intervention (Package 6)
-pytest -v tests/test_pkg6_intervention.py
+pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py
 ```
 
 ### Bước 3: Khởi động server FastAPI & Mở Swagger UI
@@ -135,7 +139,7 @@ Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/d
 ## 6. Kịch Bản Demo Trực Tiếp Trên Swagger UI (`/docs`)
 
 ### Kịch bản 1: Luồng Quét QR Giờ Cao Điểm Thông Thường (Flow A)
-1. **Tạo mã QR hợp lệ:** Gọi `POST /api/demo/qr/issue` với `employeeId="EMP-001"`, `factoryId="BD"`. Sao chép chuỗi `qrToken` nhận được.
+1. **Tạo mã QR hợp lệ:** Gọi `POST /api/demo/qr-tokens` với `employeeId="EMP-001"`, `factoryId="BD"`. Sao chép chuỗi `qrToken` nhận được.
 2. **Quét tại Kiosk:** Gọi `POST /api/gate/scans` với `scanId="scan-001"`, `qrToken` vừa tạo, `laneId="LANE-BD-01"`.
    * *Kết quả:* Nhận `state: "OPENED"` và chuỗi `commandId` (ví dụ `cmd-open-...`).
 3. **Mô phỏng bước qua:** Gọi `POST /api/controller/signals/passage` với `commandId` trên, `laneId="LANE-BD-01"`, `passageEventId="pas-001"`.
@@ -144,19 +148,20 @@ Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/d
    * *Kết quả:* Cổng gửi lệnh `closeGate` và giải phóng làn trở về trạng thái sẵn sàng.
 
 ### Kịch bản 2: Mô Phỏng Mất Mạng WAN & Chế Độ Suy Giảm (Degraded Mode)
-1. **Thiết lập chế độ Degraded (Watermark cũ 5 phút):** Gọi `POST /api/demo/watermark/offset` với `secondsAgo=300`.
+1. **Thiết lập chế độ Degraded (Watermark cũ 5 phút):** Gọi `POST /api/demo/watermark-age` với `watermarkAgeSeconds=300`.
 2. **Quét QR:** Gọi `POST /api/gate/scans`.
    * *Kết quả:* Vẫn mở cổng `state: "OPENED"`, nhưng cờ `degradedFlag: true` được gắn vào giao dịch chấm công để đối soát sau.
-3. **Thiết lập chế độ Quá hạn (Watermark cũ 45 phút > 30 phút):** Gọi `POST /api/demo/watermark/offset` với `secondsAgo=2700`.
+3. **Thiết lập chế độ Quá hạn (Watermark cũ 45 phút > 30 phút):** Gọi `POST /api/demo/watermark-age` với `watermarkAgeSeconds=2700`.
 4. **Quét QR:** Gọi `POST /api/gate/scans`.
    * *Kết quả:* Bị từ chối với `state: "CANNOT_PROCESS"`, `reason: "ELIGIBILITY_CANNOT_BE_VERIFIED"` theo đúng luật an toàn.
 
 ### Kịch bản 3: Can Thiệp Hỗ Trợ Của Bảo Vệ (Flow B – Assisted Open)
-1. **Bảo vệ mở hỗ trợ:** Gọi `POST /api/interventions/assisted-open` với:
+Mọi endpoint `/api/interventions/*` cần header `X-Guard-Session` (phiên đăng nhập mô phỏng). Dùng `demo-session-guard-bd-01` cho bảo vệ nhà máy BD.
+
+1. **Bảo vệ mở hỗ trợ:** Gọi `POST /api/interventions/assisted-open` với header `X-Guard-Session: demo-session-guard-bd-01` và body:
    ```json
    {
      "supportCaseId": "case-demo-01",
-     "guardId": "GUARD-BD-01",
      "employeeId": "EMP-001",
      "laneId": "LANE-BD-01",
      "reason": "Employee smartphone battery depleted"
@@ -164,13 +169,15 @@ Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/d
    ```
    * *Kết quả:* Trả về `state: "OPENED"`, lưu `SupportCase`.
    * *Điểm cốt lõi:* Kiểm tra danh sách chấm công thấy **hoàn toàn không phát sinh bản ghi chấm công tự động** (tuân thủ ADR-07 & I-04; chờ HR duyệt).
-2. **Bảo vệ trái phép:** Thử gửi với `guardId="STRANGER"` hoặc `GUARD-LA-01` tại nhà máy BD.
-   * *Kết quả:* Bị từ chối ngay với `state: "REJECTED"`, `reason: "GUARD_UNAUTHORIZED"`.
+2. **Chưa đăng nhập:** Gửi lại không có header `X-Guard-Session` (hoặc token lạ).
+   * *Kết quả:* HTTP 401 `GUARD_NOT_AUTHENTICATED`; không ghi hồ sơ, không mở cổng. `guardId` trong body bị bỏ qua.
+3. **Bảo vệ nhà máy khác:** Dùng `X-Guard-Session: demo-session-guard-la-01` tại nhà máy BD.
+   * *Kết quả:* Bị từ chối với `state: "REJECTED"`, `reason: "GUARD_UNAUTHORIZED"`.
 
 ### Kịch bản 4: Mở Khẩn Cấp & Thoát Khóa An Toàn (Flow B – Emergency Hold & Reset)
-1. **Kích hoạt khẩn cấp:** Gọi `POST /api/interventions/emergency-release` với `supportCaseId="emg-01"`, `guardId="GUARD-BD-01"`, `laneId="LANE-BD-01"`, `reason="Fire alarm evacuation"`.
+1. **Kích hoạt khẩn cấp:** Gọi `POST /api/interventions/emergency-release` (header `X-Guard-Session: demo-session-guard-bd-01`) với `supportCaseId="emg-01"`, `laneId="LANE-BD-01"`, `reason="Fire alarm evacuation"`.
    * *Kết quả:* Cổng mở tự do, làn được đưa vào `EMERGENCY_HOLD`.
 2. **Kiểm tra chặn quét mới:** Thử gọi `POST /api/gate/scans` tại `LANE-BD-01`.
    * *Kết quả:* Bị từ chối với `state: "LANE_BUSY"`, `reason: "LANE_HAS_ACTIVE_OR_UNRESOLVED_CYCLE"`. Mọi lượt quét mới bị phong tỏa.
-3. **Reset khẩn cấp:** Gọi `POST /api/interventions/emergency-reset` với `supportCaseId="emg-01"`, `guardId="GUARD-BD-01"`, `laneId="LANE-BD-01"`.
+3. **Reset khẩn cấp:** Gọi `POST /api/interventions/emergency-reset` (cùng header) với `supportCaseId="emg-01"`, `laneId="LANE-BD-01"`.
    * *Kết quả:* Khi controller xác nhận `RESET_CONFIRMED`, làn chuyển về `OPENED` và khi có tín hiệu `lane-clear` sẽ giải phóng làn về trạng thái hoạt động bình thường.

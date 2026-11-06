@@ -28,6 +28,25 @@ class InterventionService:
         self._auth_api = auth_api
         self._audit_api = audit_api
 
+    def _case_not_recorded(self, supportCaseId: str, guardId: str, laneId: str) -> ScanResult:
+        """Gate Core did not store the case (storage failure or supportCaseId reused with different evidence).
+
+        No gate command is requested, because the guard action would have no matching evidence.
+        """
+        self._audit_api.append_async({
+            "action": "SUPPORT_CASE_NOT_RECORDED",
+            "supportCaseId": supportCaseId,
+            "guardId": guardId,
+            "laneId": laneId,
+            "factoryId": self._factory_id,
+        })
+        return ScanResult(
+            scanId=supportCaseId,
+            state=ScanState.REJECTED,
+            laneId=laneId,
+            reason="SUPPORT_CASE_NOT_RECORDED",
+        )
+
     def record_and_open_assisted(
         self,
         supportCaseId: str,
@@ -78,7 +97,8 @@ class InterventionService:
             linkedScanId=linkedScanId,
             isEmergency=False,
         )
-        self._intervention_port.recordIntervention(case)
+        if not self._intervention_port.recordIntervention(case):
+            return self._case_not_recorded(supportCaseId, guardId, laneId)
 
         # 3. Request gate open through IInterventionRequest
         result = self._intervention_port.requestAssistedOpen(
@@ -139,7 +159,9 @@ class InterventionService:
             linkedScanId=linkedScanId,
             isEmergency=False,
         )
-        self._intervention_port.recordIntervention(case)
+        if not self._intervention_port.recordIntervention(case):
+            self._case_not_recorded(supportCaseId, guardId, laneId)
+            return False
         self._audit_api.append_async({
             "action": "SUPPORT_CASE_RECORDED",
             "supportCaseId": supportCaseId,
@@ -238,7 +260,8 @@ class InterventionService:
             linkedScanId=None,
             isEmergency=True,
         )
-        self._intervention_port.recordIntervention(case)
+        if not self._intervention_port.recordIntervention(case):
+            return self._case_not_recorded(supportCaseId, guardId, laneId)
 
         # 3. Call requestEmergencyRelease -> puts lane in EMERGENCY_HOLD and triggers emergencyRelease on controller
         result = self._intervention_port.requestEmergencyRelease(
