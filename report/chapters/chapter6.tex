@@ -1,0 +1,255 @@
+\section*{6. ARCHITECTURE DECISIONS}
+
+\phantomsection
+\addcontentsline{toc}{section}{6. ARCHITECTURE DECISIONS}
+
+This chapter records the main design decisions, the reasons behind them, and what they cost.
+
+\Needspace{9\baselineskip}
+\subsection*{6.1. Decision Log}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{6.1. Decision Log}
+
+
+Table 6.1 lists the eleven decisions. All of them rely on the API assumptions in Table 1.1.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{46pt}|>{\raggedright\arraybackslash}p{381pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{46pt}|}{\textbf{ID}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{381pt}|}{\textbf{Decision}} \\
+\hline
+\endhead
+\multicolumn{2}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 6.1. TMC Architecture Decision Log}} \\
+\endlastfoot
+ADR-01 & Use Service-based Architecture with Event-driven Integration, and organize the modules within each application as a Modular Monolith. \\
+\hline
+ADR-02 & Persist the accepted scan before opening; distinguish command receipt, confirmed opening, passage, and closing. Create automatic attendance only after a passage event. \\
+\hline
+ADR-03 & Assign data ownership to individual modules and use public interfaces for communication between modules. \\
+\hline
+ADR-04 & Isolate controller and HR/Payroll integration through two ports and their corresponding adapters. \\
+\hline
+ADR-05 & Transfer events persisted at the source, with duplicate-safe processing and tracking of application results. \\
+\hline
+ADR-06 & Use Eligibility Snapshot at each factory; after 60 seconds without confirmed updates, continue in a flagged degraded mode while the last confirmed update is less than 30 minutes old. \\
+\hline
+ADR-07 & Separate support-case intake, approval, and application of decisions to attendance data. \\
+\hline
+ADR-08 & Perform batch-based HR/Payroll handover outside the gate-processing flow; track individual batch acknowledgements and completeness of the entire period separately. \\
+\hline
+ADR-09 & Enforce permissions by operation and data scope; retain audit evidence at the source and protect personal data across all copies. \\
+\hline
+ADR-10 & Use synchronous standby replication and separate backups; perform controlled failover without bypassing durability requirements during failures. \\*
+\hline\noalign{\nobreak}
+ADR-11 & Use signed QR credentials valid for 60 seconds, bound to one factory and claimable by one accepted scan. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{6.1}TMC Architecture Decision Log}
+
+
+\subsection*{6.2. Architecture Decision Records}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{6.2. Architecture Decision Records}
+
+Each record below gives the characteristics involved, the context, the decision, the reasons, the consequences, and the trade-off.
+
+\subsubsection*{6.2.1. ADR-01: Use Service-based Architecture with Event-driven Integration}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.1. ADR-01: Use Service-based Architecture with Event-driven Integration}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-02, AC-03.
+  \item \textbf{Context:} Both factories need a kiosk result within 2 seconds and must keep scanning when their WAN link fails, while consolidation, reporting, and handover can run minutes or hours later.
+  \item \textbf{Decision:} Each factory runs its own gate application and database, and the central site runs one application for access data, attendance, reports, and handover. Three event feeds carry gate records, access changes, and resolutions between them. Inside each application, the modules form a Modular Monolith.
+  \item \textbf{Reasons:} QR validation, durable recording, and the controller call stay on the factory LAN, so the WAN is not on the scan path and a fault at one factory does not stop the other. Microservices or a broker on the gate path would add network hops without any benefit at this load.
+  \item \textbf{Consequences:} TMC has to run applications and databases at three sites and keep event contracts compatible across them.
+  \item \textbf{Trade-off:} We give up the simplicity of one deployment and accept that central data lags behind the gates. Scanning during a WAN outage is limited by ADR-06.
+\end{itemize}
+
+\subsubsection*{6.2.2. ADR-02: Persist Accepted Scans and Record Attendance after Passage}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.2. ADR-02: Persist Accepted Scans and Record Attendance after Passage}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-03, AC-05, AC-06.
+  \item \textbf{Context:} The controller and the database are separate systems. A command receipt, a confirmed opening, a passage, and a closing are different facts, and an open gate does not prove that anyone passed.
+  \item \textbf{Decision:} Store ACCEPTED and the token claim before openGate. Report a confirmed opening only after OPEN\_CONFIRMED is stored. Create one automatic attendance transaction only after a linked passage event (I-07). Send closeGate after LANE\_CLEAR and record CLOSED only when the controller confirms it (I-05).
+  \item \textbf{Reasons:} If something fails after the command, the stored scan state shows what has happened, so recovery never has to guess. Attendance follows passage rather than the opening signal, so an opened but unused gate creates no record.
+  \item \textbf{Consequences:} A repeated scanId returns its stored result. An uncertain command is inquired or reconciled and never resent automatically (I-03).
+  \item \textbf{Trade-off:} The flow needs more states and more controller signals, and the signals in I-01 and I-05 still have to be verified with the vendor.
+\end{itemize}
+
+\subsubsection*{6.2.3. ADR-03: Assign Data Ownership to Modules and Use Public Interfaces}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.3. ADR-03: Assign Data Ownership to Modules and Use Public Interfaces}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-04; Maintainability.
+  \item \textbf{Context:} Attendance, Reporting, and Payroll Handover use related data, but for different work and under different rules.
+  \item \textbf{Decision:} Each module writes only its own data. Other modules use its public interface, even when they share a database engine; Reporting and Payroll Handover, for example, read attendance through AttendanceApi.
+  \item \textbf{Reasons:} Business rules and schema changes stay with the module that owns them, and permission checks happen in one place.
+  \item \textbf{Consequences:} Contracts must define data, versions, and errors, and code review must check that no module reads another module's tables.
+  \item \textbf{Trade-off:} Interfaces add mapping work, but direct table access would spread dependencies across the system.
+\end{itemize}
+
+\subsubsection*{6.2.4. ADR-04: Isolate External Systems through Ports and Adapters}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.4. ADR-04: Isolate External Systems through Ports and Adapters}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-03, AC-06.
+  \item \textbf{Context:} The controller and HR/Payroll APIs have their own formats, and the meaning of their responses is not fully specified.
+  \item \textbf{Decision:} Gate Core defines the command ports grouped as ITurnstileControl and the separate event port IPassageEvents. Turnstile Adapter implements the command ports, and Gate Core implements IPassageEvents, which the adapter calls for PASSAGE and LANE\_CLEAR. Payroll Handover defines IPayrollSubmission, implemented by HR/Payroll Adapter.
+  \item \textbf{Reasons:} Business code works with clear meanings such as ``opening confirmed'' or ``outcome unknown'' instead of vendor response codes, and an API change stays inside one adapter.
+  \item \textbf{Consequences:} An adapter never turns a command receipt into a confirmed opening, and opening, passage, and closing stay separate. The API capabilities in I-01, I-02, and I-05 still need verification.
+  \item \textbf{Trade-off:} Adapters need contract tests, and they cannot create signals that the external systems do not provide.
+\end{itemize}
+
+\subsubsection*{6.2.5. ADR-05: Deliver Persisted Events with Duplicate-safe Processing}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.5. ADR-05: Deliver Persisted Events with Duplicate-safe Processing}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-02, AC-05.
+  \item \textbf{Context:} Factory events must survive WAN and broker outages, and they may be delivered twice or out of order.
+  \item \textbf{Decision:} Store each business change and its outgoing event together in an outbox. Consumers store the change and an event-processed marker together and use eventId and version to skip duplicates and stale data.
+  \item \textbf{Reasons:} An event is never lost because it is saved at the source first, and delivering it again later does no harm.
+  \item \textbf{Consequences:} Missing versions and outbox backlog must be monitored. A broker receipt does not prove that the business change was applied.
+  \item \textbf{Trade-off:} Central data may lag behind the factories. Event deduplication does not replace the per-scan and QR replay checks.
+\end{itemize}
+
+\subsubsection*{6.2.6. ADR-06: Use Local Eligibility Data with a Bounded Degraded Mode}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.6. ADR-06: Use Local Eligibility Data with a Bounded Degraded Mode}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-02, AC-04.
+  \item \textbf{Context:} Checking access at the central site for every scan would put the WAN on the scan path, but a local copy may miss a recent revocation.
+  \item \textbf{Decision:} Access Decision uses the factory's Eligibility Snapshot while its completeness, version, continuity, and freshness checks pass. The data is fresh for 60 seconds after a source-confirmed watermark. After that, Gate Core runs in degraded mode while the same watermark is less than 30 minutes old, accepts only valid signed QR codes, and flags every transaction for review (I-10). From 30 minutes on, new scans return CANNOT PROCESS.
+  \item \textbf{Reasons:} The local copy keeps the scan off the WAN, and the degraded window keeps the gates working through one shift-change peak when the link fails.
+  \item \textbf{Consequences:} New automatic scans stop when the limit is reached or data continuity is lost, and Attendance Review checks the flagged transactions after reconnection. QR validity and replay control are handled separately by ADR-11.
+  \item \textbf{Trade-off:} A revocation made during an outage may take up to 30 minutes to reach the factory. TMC must approve both limits; immediate revocation would need an online check or stopping the affected scans.
+\end{itemize}
+
+\subsubsection*{6.2.7. ADR-07: Separate Assisted Access Approval from Attendance Application}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.7. ADR-07: Separate Assisted Access Approval from Attendance Application}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-04, AC-05.
+  \item \textbf{Context:} Helping an employee at the gate, approving the case, and changing attendance are different actions done by different people.
+  \item \textbf{Decision:} Gate Intervention records and authorizes an eligible assisted opening through Gate Core. Attendance Review manages the evidence and HR approval, and Attendance Consolidation applies the approved decision. A case linked to a scan also sends its resolution to Gate Core through Resolution Feed.
+  \item \textbf{Reasons:} A guard's action alone cannot create attendance (I-04), and each step leaves its own evidence.
+  \item \textbf{Consequences:} Attendance Review tracks whether each decision has been applied in Attendance and, when needed, in Gate Core, using decision identifiers and versions.
+  \item \textbf{Trade-off:} The workflow adds states and delay. Emergency release stays a separate authorized action and never creates attendance.
+\end{itemize}
+
+\subsubsection*{6.2.8. ADR-08: Track Monthly HR/Payroll Handover by Batch and Period}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.8. ADR-08: Track Monthly HR/Payroll Handover by Batch and Period}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-06.
+  \item \textbf{Context:} Factory events and approvals may arrive late, and a lost HR/Payroll response leaves receipt uncertain.
+  \item \textbf{Decision:} Payroll Handover stores batch content and identity before submission, confirms receipt under I-02, and tracks the completeness of the whole period separately. The first submission is planned for 06:00, with an alert at 10:00 and linked supplementary batches before noon where needed.
+  \item \textbf{Reasons:} One confirmed batch may cover only part of the period, so batch receipt and period completion cannot be the same flag.
+  \item \textbf{Consequences:} An uncertain batch is checked by status inquiry where the API supports it. It is resent only when the contract prevents duplicates or evidence shows that resending is safe; otherwise an alert is raised.
+  \item \textbf{Trade-off:} Batch and period tracking adds work, and a long outage of a source or of HR/Payroll can still miss the deadline.
+\end{itemize}
+
+\subsubsection*{6.2.9. ADR-09: Enforce Scoped Access and Preserve Auditable, Minimal Data}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.9. ADR-09: Enforce Scoped Access and Preserve Auditable, Minimal Data}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-04, AC-05.
+  \item \textbf{Context:} Six user groups have different authority, and personal and audit data is copied across sites and backups.
+  \item \textbf{Decision:} Check identity, operation, and data scope at the server for every request. Store audit evidence at its source and send it to Audit Log; Reporting checks authorization before calling AuditApi.query. Keep personal data out of tokens, displays, events, and logs unless it is needed.
+  \item \textbf{Reasons:} A direct API call faces the same checks as the user interface, and evidence stored at the source survives an interrupted transfer.
+  \item \textbf{Consequences:} Access and retention rules apply to every copy of the data, including backups. Chapter 7 describes audit content and data protection.
+  \item \textbf{Trade-off:} Traceability needs data to be kept, while privacy limits how much is kept and for how long.
+\end{itemize}
+
+\Needspace{10\baselineskip}
+\subsubsection*{6.2.10. ADR-10: Use Controlled Failover with Synchronous Replication and Separate Backups}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.10. ADR-10: Use Controlled Failover with Synchronous Replication and Separate Backups}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-02, AC-03.
+  \item \textbf{Context:} A standby covers hardware failures, but a deletion or corruption is copied to the standby as well.
+  \item \textbf{Decision:} Use a primary and a standby database at each factory, two central application instances, synchronous database replication, and separate backups. Isolate the former primary before a replacement accepts writes or sends commands. A commit is acknowledged only when the durability conditions are met.
+  \item \textbf{Reasons:} Replication protects acknowledged commits when one database fails, and backups cover the failures that replication copies.
+  \item \textbf{Consequences:} New scans stop if safe durable writes are not possible, and recovery checks unfinished scans and token claims before scanning restarts.
+  \item \textbf{Trade-off:} Cost and write latency increase. The recovery targets in Chapter 5 are proposals that still have to be measured.
+\end{itemize}
+
+\subsubsection*{6.2.11. ADR-11: Use Short-lived, Factory-bound QR Credentials}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{6.2.11. ADR-11: Use Short-lived, Factory-bound QR Credentials}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics:} AC-01, AC-04, AC-06.
+  \item \textbf{Context:} A reusable QR image can be copied and shown by another person.
+  \item \textbf{Decision:} Under I-09, the central site issues a signed QR credential valid for 60 seconds and bound to one factory. All lanes of that factory share Gate Core's token-claim data, and one tokenId is claimed by only one ACCEPTED scan, in the same write as ACCEPTED and before openGate.
+  \item \textbf{Reasons:} The short lifetime, the factory binding, and the shared claim limit reuse without a central call for each scan.
+  \item \textbf{Consequences:} Chapter 7 describes issuance, validation, and replay control. The email route to the QR display is still an assumption (I-08).
+  \item \textbf{Trade-off:} A copied image can still be used before its first claim, because the credential alone does not prove who is holding the phone.
+\end{itemize}
+
+\Needspace{15\baselineskip}
+\subsection*{6.3. Mapping ADRs to Requirements and Architecture Views}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{6.3. Mapping ADRs to Requirements and Architecture Views}
+
+
+Table 6.2 links each decision to the requirements it supports and the sections where it appears in the design. A requirement listed for one ADR may also need other decisions to be met in full.
+
+External API capabilities, replay behavior after recovery, and TMC's approval of the two eligibility-data limits (I-10) are still open and are listed in Section 9.2.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{41.5pt}|>{\raggedright\arraybackslash}p{145.5pt}|>{\raggedright\arraybackslash}p{224.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{41.5pt}|}{\textbf{ADR}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{145.5pt}|}{\textbf{Related requirements and supporting basis}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{224.5pt}|}{\textbf{Corresponding view or design section}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 6.2. Mapping ADRs to Requirements and Architecture}} \\
+\endlastfoot
+ADR-01 & NFR-01; operation at two factories; AC-02 & Selection analysis in Sections 3.3--3.5; application placement and component mapping in Section 5.2. \\
+\hline
+ADR-02 & FR-02.2; FR-03.3--FR-03.6; NFR-01; NFR-02; NFR-03; I-01; I-03; I-05; I-07 & QR flow in Section 4.2.2; states and processing order in Section 4.2.5; durable persistence in Section 5.6.1. \\
+\hline
+ADR-03 & FR-04.1--FR-04.4; FR-04.6--FR-04.7; NFR-03; NFR-04 & Module View and dependency rules in Section 4.1; data ownership in Section 4.2.1; central data persistence in Section 5.6.1. \\
+\hline
+ADR-04 & FR-02.2; FR-04.3; IC-01; IC-02; I-01--I-03; I-05 & The two ports in the Module View and C\&C View; contracts in Section 4.2.1; external-system connections in Section 5.3. \\
+\hline
+ADR-05 & FR-03.3--FR-03.6; FR-04.4--FR-04.5; NFR-02; NFR-03 & Channels in the C\&C View; duplicate prevention in Section 4.2.5; Event-driven Integration in Section 3.5; delivery and acknowledgement in Section 5.3. \\
+\hline
+ADR-06 & FR-01.4; FR-03.2; NFR-03; AC-02; AC-04 & Eligibility Snapshot in Sections 4.1.1 and 4.2.5; conditions for using access-right data in Sections 5.7.2--5.7.3. \\
+\hline
+ADR-07 & FR-03.3; FR-04.4--FR-04.5; NFR-03; I-04 & Support flow and decision application in Section 4.2.3; support and emergency handling in Section 5.7.4. \\
+\hline
+ADR-08 & FR-04.2--FR-04.3; IC-01; I-02 & Handover flow in Section 4.2.4; batch states in Section 4.2.5; handover recovery in Section 5.7.4. \\
+\hline
+ADR-09 & FR-04.5--FR-04.7; FR-05.1; FR-05.5; NFR-03; NFR-04 & Authorization and audit in Section 4.2.1; network, access, and data boundaries in Section 5.5. \\
+\hline
+ADR-10 & FR-02.3; FR-05.3--FR-05.4; NFR-01; NFR-02; AC-02 & Deployment View in Section 5.1; standby replication and backups in Sections 5.6.2--5.6.3; recovery and verification in Section 5.7. \\*
+\hline\noalign{\nobreak}
+ADR-11 & FR-01.2--FR-01.3; FR-03.2; NFR-03; I-08--I-09 & QR issuance, validation, and replay controls in Sections 7.3.1--7.3.3; response to Issue 2 in Section 5.8.2. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{6.2}Mapping ADRs to Requirements and Architecture}
+
+

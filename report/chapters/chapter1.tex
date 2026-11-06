@@ -1,0 +1,352 @@
+\section*{1. CONTEXT AND REQUIREMENTS}
+
+\phantomsection
+\addcontentsline{toc}{section}{1. CONTEXT AND REQUIREMENTS}
+
+\subsection*{1.1. TMC Context and Problem Statement}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.1. TMC Context and Problem Statement}
+
+TMC Manufacturing Joint Stock Company operates in the manufacturing sector and has two factories in different provinces: Binh Duong with about 800 employees and Long An with about 600 employees.
+
+\Needspace{6\baselineskip}
+The company needs a system that controls employee access to the workplace and provides data for monthly attendance reports:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Each employee shows a QR code on a personal smartphone.
+  \item A kiosk at each lane reads the code, and the system checks the employee's access rights.
+  \item The existing turnstile system opens and closes the gate.
+  \item Each entry or exit is recorded as an attendance transaction.
+  \item Attendance data is sent to the existing HR/Payroll system through an API and must be available for reconciliation before 12:00 noon on the first day of each month.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{1.2. System Objectives}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.2. System Objectives}
+
+
+The system has four objectives:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{OBJ-01 -- Access control:} identify employees by QR code and allow only authorized employees to pass the existing turnstiles.
+  \item \textbf{OBJ-02 -- Attendance recording:} record each entry and exit as an attendance transaction without loss or duplication.
+  \item \textbf{OBJ-03 -- Reporting and handover:} provide monthly attendance reports and transfer the data to HR/Payroll before noon on the first day of each month.
+  \item \textbf{OBJ-04 -- Quality:} meet the assignment's requirements for kiosk response time, no record loss, RBAC with audit logging, and personal-data protection.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{1.3. Scope: In Scope and Out of Scope}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.3. Scope: In Scope and Out of Scope}
+
+\subsubsection*{1.3.1. In Scope}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.3.1. In Scope}
+
+
+The current phase covers the following parts:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Employee information and QR codes.
+  \item Stations, lanes, and kiosks at both factories.
+  \item Gate control through the existing turnstile system.
+  \item Entry and exit recording, with review and adjustment of attendance data.
+  \item Attendance queries and monthly reports.
+  \item Accounts, roles, permissions, and login.
+  \item Audit logs, operational monitoring, and administration.
+  \item Delivery of attendance data to HR/Payroll.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsubsection*{1.3.2. Out of Scope}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.3.2. Out of Scope}
+
+
+As stated in the assignment, the following items are out of scope for this phase:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Visitor management:} visitors and their entries and exits.
+  \item \textbf{Payroll calculation:} salaries, allowances, and deductions stay in HR/Payroll; the system only provides attendance data.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{1.4. Stakeholders, Actors and External Systems}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.4. Stakeholders, Actors and External Systems}
+
+\subsubsection*{1.4.1. Stakeholders}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.4.1. Stakeholders}
+
+
+Besides the six user groups, three other stakeholders are considered:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{TMC (system owner):} needs reliable attendance data, an on-time monthly handover, and an acceptable operating cost.
+  \item \textbf{Employees as data subjects:} their personal data should be used only for access control and attendance.
+  \item \textbf{Operators of the turnstile and HR/Payroll systems:} need clear API contracts and agreed responsibilities when a failure occurs.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsubsection*{1.4.2. Six User Groups}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.4.2. Six User Groups}
+
+
+The assignment names six user groups:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Employee:} shows a fresh QR code on a smartphone, passes through the gates, views their own attendance records, and reports discrepancies.
+  \item \textbf{Production Supervisor:} monitors attendance in the assigned area and helps verify exceptional cases, but cannot modify attendance directly.
+  \item \textbf{HR Staff:} maintains employee data, access permissions, and shift schedules; reviews discrepancies and approves adjustments with evidence; monitors the HR/Payroll handover.
+  \item \textbf{Security Guard:} monitors gate results, assists employees who cannot show a QR code, and performs emergency gate opening within their authority.
+  \item \textbf{System Administrator:} manages accounts, roles, and station, lane, and kiosk settings; monitors, backs up, and restores the system. Business data is not accessible by default.
+  \item \textbf{Executive Management:} views reports and aggregated statistics.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsubsection*{1.4.3. External Systems and Employee Channels}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.4.3. External Systems and Employee Channels}
+
+
+The system connects to two existing systems and to several devices and channels:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Turnstile control system:} existing system. The assignment states that it offers APIs to open and close the gate for each access event. The signals it reports are not specified, so we state them as assumptions I-01 and I-05.
+  \item \textbf{HR/Payroll system:} TMC's existing payroll system; it takes attendance data from us through its API (IC-01).
+  \item \textbf{Kiosk:} one kiosk per lane, with a QR scanner and a display. The kiosk software is part of the system.
+  \item \textbf{Smartphone, mobile app, web portal, email:} channels listed in the assignment for displaying a QR code. The use of email is described in assumption I-08.
+  \item \textbf{Management interface:} used by guards, HR staff, supervisors, administrators, and executives according to role.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{1.5. Constraints from the Assignment}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.5. Constraints from the Assignment}
+
+
+The assignment gives three scope constraints: employees are identified by QR code, the QR code is displayed on a personal smartphone, and the current phase covers only the Binh Duong and Long An factories. It also requires two integrations, but does not specify their message formats, response signals, or availability; our assumptions about them are listed in Table 1.1.
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{IC-01 -- HR/Payroll integration:} attendance data is sent to the existing HR/Payroll system through its API and must be available for reconciliation before 12:00 noon on the first day of each month. Payroll calculation stays in HR/Payroll.
+  \item \textbf{IC-02 -- Turnstile integration:} gates are opened and closed through the existing turnstile system's API. Because gate opening is part of the kiosk response, this call is included in the 2-second limit of NFR-01.
+\end{itemize}
+
+The M2 assignment later adds two issues: loss of connectivity during a transaction, and exposure of static QR codes. They are not part of the M1 assignment, but their solutions shape the architecture, so we answer them in Section 5.8.
+
+\subsection*{1.6. Functional Requirements}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.6. Functional Requirements}
+
+The functional requirements follow the five areas named in the assignment. We split each area into numbered sub-requirements.
+
+\subsubsection*{1.6.1. FR-01 -- User and QR Code Management}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.6.1. FR-01 -- User and QR Code Management}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{FR-01.1:} The system shall manage the information needed to identify employees, control access, and record attendance.
+  \item \textbf{FR-01.2:} The system shall issue each employee a short-lived QR code whose authenticity can be checked and which carries no unnecessary personal information.
+  \item \textbf{FR-01.3:} The system shall let employees obtain and display QR codes on their smartphones through the mobile app or web portal, and obtain a new code when the current one expires. Company email may link to the authenticated QR screen (I-08).
+  \item \textbf{FR-01.4:} The system shall let authorized users activate, suspend, revoke, and reinstate an employee's access permission.
+\end{itemize}
+
+\subsubsection*{1.6.2. FR-02 -- Gate Station Management}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.6.2. FR-02 -- Gate Station Management}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{FR-02.1:} The system shall manage stations, lanes, and kiosks at each factory, including whether a lane is for entry or exit.
+  \item \textbf{FR-02.2:} The system shall open and close the gate through the existing turnstile system for each authorized entry or exit, and distinguish between a received command, a confirmed opening, a confirmed passage, and a confirmed closing.
+  \item \textbf{FR-02.3:} The system shall monitor kiosks and controllers and report faults that affect entry and exit.
+  \item \textbf{FR-02.4:} The system shall let authorized users open a gate in an emergency and record every such opening.
+\end{itemize}
+
+\subsubsection*{1.6.3. FR-03 -- Attendance Event Recording}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.6.3. FR-03 -- Attendance Event Recording}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{FR-03.1:} The system shall receive QR codes scanned at kiosks and return the result to the kiosk.
+  \item \textbf{FR-03.2:} For a QR scan, the system shall allow a gate to open only when the QR code is valid, the employee is active, and the employee has access permission for that factory. Guard-assisted access (I-04) and emergency opening (FR-02.4) follow their own authorization rules.
+  \item \textbf{FR-03.3:} The system shall record an attendance transaction for each confirmed entry or exit. Records created through guard assistance require supporting evidence and approval.
+  \item \textbf{FR-03.4:} The system shall not create a duplicate transaction when the same scan is resubmitted.
+  \item \textbf{FR-03.5:} Each transaction shall include the employee ID, the timestamp in Vietnam time, the direction, the factory, the lane, and the source of the record.
+  \item \textbf{FR-03.6:} The system shall retain rejected, failed, and undetermined scans for traceability.
+\end{itemize}
+
+\subsubsection*{1.6.4. FR-04 -- Reporting and Auditing}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.6.4. FR-04 -- Reporting and Auditing}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{FR-04.1:} The system shall provide access and attendance monitoring information to authorized users.
+  \item \textbf{FR-04.2:} The system shall produce monthly attendance reports for each employee, factory, and period.
+  \item \textbf{FR-04.3:} The system shall transfer attendance data to HR/Payroll through its API in the format HR/Payroll requires.
+  \item \textbf{FR-04.4:} The system shall support reviewing and adjusting attendance through a request and approval process that preserves the original data.
+  \item \textbf{FR-04.5:} The system shall maintain audit logs of administrative actions, permission changes, gate results, attendance adjustments, and handovers.
+  \item \textbf{FR-04.6:} The system shall allow employees to view their own attendance records, and supervisors and HR staff to view records within their assigned scope.
+  \item \textbf{FR-04.7:} The system shall let authorized users search and view audit logs.
+\end{itemize}
+
+\subsubsection*{1.6.5. FR-05 -- System Administration}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.6.5. FR-05 -- System Administration}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{FR-05.1:} The system shall manage accounts, roles, and permissions.
+  \item \textbf{FR-05.2:} The system shall let HR staff manage shift schedules and attendance aggregation rules.
+  \item \textbf{FR-05.3:} The system shall monitor operational status and raise alerts for faults in kiosks, controllers, or the HR/Payroll integration.
+  \item \textbf{FR-05.4:} The system shall support backup and recovery of its data.
+  \item \textbf{FR-05.5:} The system shall authenticate users, reject invalid logins, allow logout, and restrict functions according to the user's role.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{1.7. Non-functional Requirements}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.7. Non-functional Requirements}
+
+
+The assignment gives four non-functional requirements. We keep them as written and only add where the NFR-01 response time is measured.
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{NFR-01 -- Performance:} kiosk response time shall not exceed 2 seconds at shift change, with about 800 entry and exit events in 30 minutes per factory. Response time is measured from when the kiosk reads the QR code until it displays the result.
+  \item \textbf{NFR-02 -- Reliability:} attendance records shall not be lost during normal system operation.
+  \item \textbf{NFR-03 -- Security and auditability:} the system shall enforce RBAC with complete audit logging. Every administrative action and every entry or exit attempt, including rejected ones, is logged.
+  \item \textbf{NFR-04 -- Privacy:} personal data of employees shall be protected as required by the applicable data protection law. Access is limited by role, and each component stores only the personal data required for its responsibilities.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsubsection*{1.7.1. Shift-change Workload Estimate}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.7.1. Shift-change Workload Estimate}
+
+
+Shift changes are the peak period stated in the assignment, with about 800 events within 30 minutes (1,800 seconds) at each factory.
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Average rate per factory:
+  \[
+  \frac{800}{1800} \approx 0.44 \mbox{ events/second} \;(\approx 26.7 \mbox{ events/minute}).
+  \]
+  \item Rate at the shared components when both factories change shifts at the same time:
+  \[
+  \frac{2 \times 800}{1800} \approx 0.89 \mbox{ events/second}.
+  \]
+\end{itemize}
+
+These values are averages. Most employees arrive within a few minutes before the shift starts, so short peaks are higher than 0.44 events per second. NFR-01 must still be met for each scan during these peaks.
+
+\Needspace{9\baselineskip}
+\subsection*{1.8. Assumptions and Team Policy}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.8. Assumptions and Team Policy}
+
+
+The assignment leaves several points open: what the turnstile API reports back, whether HR/Payroll confirms receipt, how long a QR code stays valid, and how email shows a QR code. Our design depends on the answers, so Table 1.1 records the assumption we use for each point, and later chapters refer to it by ID. The Status column shows whether a point still has to be checked with the API owner or approved by TMC.
+
+{\small\renewcommand{\arraystretch}{1.08}
+\begin{longtable}{|>{\raggedright\arraybackslash}p{28pt}|>{\raggedright\arraybackslash}p{325pt}|>{\raggedright\arraybackslash}p{64pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{28pt}|}{\textbf{ID}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{325pt}|}{\textbf{Assumption or policy}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{64pt}|}{\textbf{Status}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 1.1. Assumptions, Team Policy, and Confirmation Status}} \\
+\endlastfoot
+I-01 & \textbf{Controller contract.} The controller API distinguishes request receipt from confirmed opening (OPEN\_CONFIRMED) and reports a passage event with a stable identifier linked to the lane and command. & Verify API \\
+\hline
+I-02 & \textbf{HR/Payroll receipt.} HR/Payroll receives data in batches and returns a receipt acknowledgement or a clear rejection of the content. A handover succeeds only when this acknowledgement is received; without either answer the outcome is undetermined. & Verify API \\
+\hline
+I-03 & \textbf{No blind resend.} An attempt with an undetermined controller outcome is not treated as successful, and the opening command is not resent automatically. & Team policy \\
+\hline
+I-04 & \textbf{Assisted access.} A security guard assists an employee who cannot present a QR code, or whose QR scan cannot be completed, after verifying identity and current access eligibility. The attempt counts toward attendance only after HR approval. & TMC to approve \\
+\hline
+I-05 & \textbf{Closing contract.} The controller reports LANE\_CLEAR only when the opening opportunity has ended and the lane is physically clear. The system then sends closeGate once, and the controller's safety interlock reports CLOSED. Missing passage after 15 seconds is sent for reconciliation; this timer never authorizes closing. & Verify API \\
+\hline
+I-06 & \textbf{Shift-independent access.} Factory access does not depend on the work-shift schedule; shifts govern attendance aggregation only. & Open \\
+\hline
+I-07 & \textbf{Passage-based attendance.} A normal QR attendance transaction is created only after the I-01 passage event is durably recorded. Opening alone never creates attendance; missing passage evidence goes to reconciliation. & Team policy \\
+\hline
+I-08 & \textbf{Email channel.} Company email leads the employee to an authenticated, fresh QR display instead of carrying a reusable QR image. & Open \\
+\hline
+I-09 & \textbf{QR policy.} A signed QR code is valid for 60 seconds, is bound to one factory, and can be claimed by only one ACCEPTED scan across that factory's lanes. & Team policy \\*
+\hline\noalign{\nobreak}
+I-10 & \textbf{Eligibility freshness and degraded mode.} Factory-local access-right data is fresh while its last source-confirmed checkpoint is at most 60 seconds old. After that, the factory may switch to degraded mode and keep accepting valid signed QR codes until 30 minutes after the last confirmed checkpoint. Each such transaction is flagged for review. Automatic acceptance stops at the 30-minute mark, or earlier if another required condition, such as the clock-error bound or a durable write, no longer holds. TMC has to accept the risk that an employee whose access was revoked during this window may still pass; the review flag cannot undo that entry. & TMC to approve \\
+\hline
+\end{longtable}
+}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{1.1}Assumptions, Team Policy, and Confirmation Status}
+
+
+\Needspace{9\baselineskip}
+\subsection*{1.9. Main Business Flows}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{1.9. Main Business Flows}
+
+\subsubsection*{1.9.1. Gate Entry/Exit and Attendance Recording Flow}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.9.1. Gate Entry/Exit and Attendance Recording Flow}
+
+
+A normal QR entry or exit goes through six steps:
+
+\begin{enumerate}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item The employee opens a fresh QR code on the smartphone and presents it at the kiosk.
+  \item The kiosk reads the QR code, and the system validates it and checks access permission.
+  \item If access is allowed and the lane is free, the system reserves the lane, claims the QR code, and stores the accepted attempt in one write, and only then sends the opening command.
+  \item The controller confirms opening, the system stores this result, and the kiosk displays it within 2 seconds.
+  \item When the controller reports passage, the system records the attendance transaction.
+  \item When the controller reports LANE\_CLEAR, the system closes the gate.
+\end{enumerate}
+
+Once the confirmed opening has been stored, returning the kiosk result, recording passage-based attendance, and closing safely run independently. Steps 5 and 6 respond to their respective controller signals; neither waits for the kiosk to display the result.
+
+\Needspace{6\baselineskip}
+The flow also has to handle these exceptions:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item invalid QR code or no permission; a busy lane; access data that is too old;
+  \item a resubmitted scan; a controller error or no response;
+  \item missing passage; missing closing confirmation;
+  \item an employee without a QR code.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsubsection*{1.9.2. Attendance Data Handover to HR/Payroll Flow}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{1.9.2. Attendance Data Handover to HR/Payroll Flow}
+
+Each month, the handover goes through five steps:
+
+\begin{enumerate}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Aggregate attendance data for the previous month.
+  \item Resolve missing records, discrepancies, and undetermined outcomes within the applicable authority.
+  \item Package the data in the format HR/Payroll requires and send it through the API.
+  \item Receive the HR/Payroll acknowledgement.
+  \item Resolve an unconfirmed handover under the receipt and resubmission rules of Flow C (Section 4.2.4). Later adjustments are sent as supplementary handovers.
+\end{enumerate}

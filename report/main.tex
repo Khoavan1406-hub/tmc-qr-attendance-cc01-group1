@@ -1,0 +1,233 @@
+\documentclass[12pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T5,T1]{fontenc}
+\usepackage{mathptmx}
+\usepackage{courier}
+\usepackage{pdflscape}
+\usepackage[a4paper, left=1in, right=1in, top=1in, bottom=1in]{geometry}
+\usepackage{graphicx}
+\usepackage{longtable}
+\usepackage{array}
+\makeatletter
+\providecommand\insert@pcolumn{\insert@column}
+\makeatother
+\ExplSyntaxOn
+\cs_if_exist:NF \tbl_gdecr_row_count: { \cs_new:Npn \tbl_gdecr_row_count: {} }
+\ExplSyntaxOff
+\usepackage[table]{xcolor}
+\usepackage{enumitem}
+\usepackage{setspace}
+\usepackage{titlesec}
+\usepackage{tocloft}
+\usepackage[hidelinks]{hyperref}
+\usepackage{microtype}
+\usepackage{needspace}
+\usepackage{fancyhdr}
+\usepackage{lastpage}
+
+\definecolor{tableheader}{RGB}{153,153,153}
+\definecolor{rulegray}{RGB}{153,153,153}
+
+% Header and footer configuration
+\setlength{\headheight}{26pt}
+\renewcommand{\headrulewidth}{0.4pt}
+\renewcommand{\footrulewidth}{0.4pt}
+\pagestyle{fancy}
+\fancyhf{}
+\lhead{\includegraphics[scale=0.05]{figure/logo_alt.png} HCMUT}
+\rhead{Software Architecture}
+\cfoot{}
+\rfoot{page \thepage\ of \pageref{LastPage}}
+
+% Ensure plain pages (e.g. Table of Contents) also use the fancy header and footer
+\fancypagestyle{plain}{%
+  \fancyhf{}%
+  \lhead{\includegraphics[scale=0.05]{figure/logo_alt.png} HCMUT}%
+  \rhead{Software Architecture}%
+  \cfoot{}%
+  \rfoot{page \thepage\ of \pageref{LastPage}}%
+  \renewcommand{\headrulewidth}{0.4pt}%
+  \renewcommand{\footrulewidth}{0.4pt}%
+}
+\setstretch{1.15}
+\setlength{\parindent}{0pt}
+\setlength{\parskip}{6pt}
+\setlength{\LTpre}{6pt}
+\setlength{\LTpost}{6pt}
+\setlength{\arrayrulewidth}{1.2pt}
+\setlength{\tabcolsep}{5pt}
+\renewcommand{\arraystretch}{1.45}
+
+% Heading hierarchy: chapter 16pt, numbered section 14pt, subsection/body 12pt.
+\titleformat{\section}{\normalfont\fontsize{16}{20}\bfseries}{\thesection}{0.5em}{}
+\titlespacing*{\section}{0pt}{10pt}{6pt}
+
+\titleformat{\subsection}{\normalfont\fontsize{14}{18}\bfseries}{\thesubsection}{0.5em}{}
+\titlespacing*{\subsection}{0pt}{8pt}{4pt}
+
+\titleformat{\subsubsection}{\normalfont\fontsize{12}{15}\bfseries}{\thesubsubsection}{0.5em}{}
+\titlespacing*{\subsubsection}{0pt}{6pt}{3pt}
+
+% TOC formatting
+\renewcommand{\contentsname}{\fontsize{17}{20}\selectfont\textbf{Table of Contents}}
+\setlength{\cftbeforesecskip}{4pt}
+\setlength{\cftbeforesubsecskip}{2pt}
+\setlength{\cftbeforesubsubsecskip}{1pt}
+\setlength{\cftsecindent}{0pt}
+\setlength{\cftsubsecindent}{18pt}
+\setlength{\cftsubsubsecindent}{36pt}
+\renewcommand{\cftsecfont}{\bfseries}
+\renewcommand{\cftsecpagefont}{\bfseries}
+\renewcommand{\cftsecleader}{\cftdotfill{\cftdotsep}}
+\renewcommand{\listfigurename}{\fontsize{17}{20}\selectfont\textbf{List of Figures}}
+\renewcommand{\listtablename}{\fontsize{17}{20}\selectfont\textbf{List of Tables}}
+\setlength{\cftfignumwidth}{3.6em}
+\setlength{\cfttabnumwidth}{3.6em}
+\setlength{\cftbeforefigskip}{2pt}
+\setlength{\cftbeforetabskip}{2pt}
+
+\begin{document}
+
+% ==================== COVER PAGE ====================
+\hypersetup{pageanchor=false}
+\begin{titlepage}
+\newgeometry{left=1in,right=1in,top=45pt,bottom=45pt}
+\begin{center}
+{\fontsize{15}{19}\selectfont\textbf{VIETNAM NATIONAL UNIVERSITY HO CHI MINH CITY}\par}
+\vspace{2pt}
+{\fontsize{15}{19}\selectfont\textbf{HO CHI MINH CITY UNIVERSITY OF TECHNOLOGY}\par}
+\vspace{2pt}
+{\fontsize{15}{19}\selectfont\textbf{FACULTY OF COMPUTER SCIENCE AND ENGINEERING}\par}
+
+\vspace{14pt}
+\includegraphics[width=125pt,height=110pt,keepaspectratio]{figure/01_logobachkhoasang.png}
+\vspace{14pt}
+
+{\fontsize{17}{21}\selectfont\textbf{SOFTWARE ARCHITECTURE}\par}
+\vspace{6pt}
+{\color{rulegray}\rule{\textwidth}{0.6pt}}\par
+\vspace{6pt}
+{\fontsize{14}{18}\selectfont\textbf{M2 - Requirements Analysis and Architectural Design}\par}
+\vspace{3pt}
+{\fontsize{14}{18}\selectfont\textbf{QR-based Time and Attendance and Access Control System for TMC}\par}
+\vspace{6pt}
+{\color{rulegray}\rule{\textwidth}{0.6pt}}\par
+\vspace{10pt}
+
+{\fontsize{16}{20}\selectfont\textbf{MAJOR: COMPUTER SCIENCE}\par}
+\vspace{3pt}
+{\fontsize{16}{20}\selectfont\textbf{SUPERVISOR:} {\fontencoding{T5}\selectfont Trương Thị Thái Minh}\par}
+\vspace{3pt}
+{\fontsize{16}{20}\selectfont\textbf{------o0o------}\par}
+\vspace{10pt}
+
+{\renewcommand{\arraystretch}{1.45}
+\setlength{\arrayrulewidth}{1.5pt}
+\begin{tabular}{|p{156pt}|>{\centering\arraybackslash}p{125pt}|}
+\hline
+\multicolumn{1}{|>{\centering\arraybackslash}p{156pt}|}{\textbf{Student Name}} & \textbf{Student ID} \\
+\hline
+{\fontencoding{T5}\selectfont Văn Công Khoa} & 2352594 \\
+\hline
+{\fontencoding{T5}\selectfont Phạm Đăng Khoa} & 2352582 \\
+\hline
+{\fontencoding{T5}\selectfont Châu Anh Nhật} & 2352856 \\
+\hline
+{\fontencoding{T5}\selectfont Trần Liên Khang} & 2352504 \\
+\hline
+{\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & 2352499 \\
+\hline
+{\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 2352100 \\
+\hline
+\end{tabular}
+}
+
+\vfill
+{\fontsize{16}{20}\selectfont\textbf{HO CHI MINH CITY, NOVEMBER 2026}\par}
+\end{center}
+\end{titlepage}
+\hypersetup{pageanchor=true}
+\restoregeometry
+
+\newpage
+% ==================== DIVISION OF WORK ====================
+\begin{center}
+{\fontsize{17}{20}\selectfont\textbf{Division of Work}}
+\end{center}
+
+\vspace{6pt}
+{\renewcommand{\arraystretch}{1.4}
+\begin{center}
+\begin{tabular}{|>{\centering\arraybackslash}p{24pt}|>{\raggedright\arraybackslash}p{214pt}|>{\raggedright\arraybackslash}p{100pt}|>{\centering\arraybackslash}p{64pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{24pt}|}{\textbf{No.}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{214pt}|}{\textbf{Task}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{100pt}|}{\textbf{Assigned To}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{64pt}|}{\textbf{Completion}} \\
+\hline
+1 & Chapter 1: Context and Requirements (context, scope, users, FR/NFR, assumptions, business flows). & {\fontencoding{T5}\selectfont Văn Công Khoa} & 100\% \\
+\hline
+2 & Chapter 2: Architecture Characteristics (identification, selection, success criteria, trade-offs). & {\fontencoding{T5}\selectfont Phạm Đăng Khoa} & 100\% \\
+\hline
+3 & Chapter 4: Logical Architecture (module identification, Module View, C\&C View, runtime flows, states) and its diagrams. & {\fontencoding{T5}\selectfont Châu Anh Nhật} & 100\% \\
+\hline
+4 & Chapter 3: Style Selection and Quantum Analysis. Chapter 5: Physical Architecture, including the response to Issue 1 (Section 5.8.1). & {\fontencoding{T5}\selectfont Trần Liên Khang} & 100\% \\
+\hline
+5 & Chapter 7: Design Principles and Data Security, including the response to Issue 2 (Section 5.8.2, ADR-11). & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & 100\% \\
+\hline
+6 & Chapter 6: Architecture Decisions. Chapters 8--9: Reflection and Conclusion. Report integration and final review. & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
+\hline
+7 & Task 2: Gate Core implementation, tests, and GitHub repository. & All members & 100\% \\
+\hline
+\end{tabular}
+\end{center}
+}
+
+\newpage
+% ==================== TABLE OF CONTENTS ====================
+\tableofcontents
+
+\newpage
+\phantomsection
+\addcontentsline{toc}{section}{LIST OF FIGURES}
+\listoffigures
+
+\newpage
+\phantomsection
+\addcontentsline{toc}{section}{LIST OF TABLES}
+\listoftables
+
+\newpage
+% ==================== CHAPTER 1 ====================
+\input{chapters/chapter1.tex}
+
+\newpage
+% ==================== CHAPTER 2 ====================
+\input{chapters/chapter2.tex}
+
+\newpage
+% ==================== CHAPTER 3 ====================
+\input{chapters/chapter3.tex}
+
+\newpage
+% ==================== CHAPTER 4 ====================
+\input{chapters/chapter4.tex}
+
+\newpage
+% ==================== CHAPTER 5 ====================
+\input{chapters/chapter5.tex}
+
+\newpage
+% ==================== CHAPTER 6 ====================
+\input{chapters/chapter6.tex}
+
+\newpage
+% ==================== CHAPTER 7 ====================
+\input{chapters/chapter7.tex}
+
+\newpage
+% ==================== CHAPTER 8 ====================
+\input{chapters/reflection.tex}
+
+\newpage
+% ==================== CHAPTER 9 ====================
+\input{chapters/chapter8.tex}
+
+\end{document}

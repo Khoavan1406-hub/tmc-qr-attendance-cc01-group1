@@ -1,0 +1,79 @@
+\section*{APPENDICES}
+
+\addcontentsline{toc}{section}{APPENDICES}
+
+\subsection*{APPENDIX A. INITIAL FR MAPPING}
+
+\addcontentsline{toc}{subsection}{APPENDIX A. INITIAL FR MAPPING}
+
+\subsubsection*{A.1. Initial FR Mapping}
+
+\addcontentsline{toc}{subsubsection}{A.1. Initial FR Mapping}
+
+Table A.1 maps the functional requirements to the initial components of Table 4.1, including Gate Intervention and Work Schedule Policy, which were added when the mapping showed missing responsibilities. Table 4.5 gives the mapping after restructuring.
+
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{40.5pt}|>{\raggedright\arraybackslash}p{177.5pt}|>{\raggedright\arraybackslash}p{193.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{40.5pt}|}{\textbf{FR}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{177.5pt}|}{\textbf{Requirement Summary}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{193.5pt}|}{\textbf{Responsible Components}} \\
+\hline
+\endhead
+FR-01.1 & Employee information for identification, access control, and attendance recording. & Access Rights \\
+\hline
+FR-01.2 & QR credentials whose authenticity and integrity can be verified. & QR Credential \\
+\hline
+FR-01.3 & QR display and retrieval of a new code. & QR Credential; Employee Portal \\
+\hline
+FR-01.4 & Activation, suspension, revocation, and reissuance of access rights. & Access Rights \\
+\hline
+FR-02.1 & Management of stations, lanes, and directions. & Gate Station Config \\
+\hline
+FR-02.2 & Turnstile controller integration. & Access Decision; Turnstile Adapter \\
+\hline
+FR-02.3 & Monitoring of station and device status. & Monitoring; Station Client \\
+\hline
+FR-02.4 & Emergency gate opening. & Gate Intervention \\
+\hline
+FR-03.1 & QR submission and result display. & Station Client; Access Decision \\
+\hline
+FR-03.2 & Validation of access conditions. & Access Decision; QR Credential; Access Rights \\
+\hline
+FR-03.3 & Recording of attendance transactions. & Attendance Recorder; Attendance Sync \\
+\hline
+FR-03.4 & Prevention of duplicate records when the same request is resubmitted. & Access Decision; Attendance Recorder \\
+\hline
+FR-03.5 & Storage of complete transaction information. & Attendance Recorder \\
+\hline
+FR-03.6 & Recording of rejected, failed, and undetermined attempts. & Access Decision; Audit Log \\
+\hline
+FR-04.1 & Attendance and access monitoring. & Reporting \\
+\hline
+FR-04.2 & Monthly reporting. & Reporting \\
+\hline
+FR-04.3 & Data handover to HR/Payroll. & Payroll Export \\
+\hline
+FR-04.4 & Submission and approval of adjustment requests, with adjustment history retained. & Attendance Review/Adjustment; Employee Portal \\
+\hline
+FR-04.5 & Auditing of business and administrative actions. & Audit Log; the component performing the action \\
+\hline
+FR-04.6 & Queries within the authorized data scope. & Reporting; Employee Portal; Identity \& RBAC \\
+\hline
+FR-04.7 & Audit queries subject to authorization. & Reporting; Audit Log; Identity \& RBAC \\
+\hline
+FR-05.1 & Management of accounts, roles, and permissions. & Identity \& RBAC \\
+\hline
+FR-05.2 & Management of shift schedules and attendance aggregation rules. & Work Schedule Policy \\
+\hline
+FR-05.3 & Operational monitoring and integration error tracking. & Monitoring \\
+\hline
+FR-05.4 & Backup and recovery. & Monitoring; operational mechanisms of the components that own the data \\
+\hline
+FR-05.5 & Login, logout, and access control. & Identity \& RBAC \\
+\hline
+\end{longtable}
+
+\begin{center}
+
+\textbf{Table A.1. Initial FR-to-Component Mapping}
+
+\end{center}

@@ -2,6 +2,7 @@
 
 Repository hiện thực hóa **Task 2 (Code Implementation)** của môn **Kiến trúc Phần mềm (HK261 – HCMUT)** cho hệ thống chấm công và kiểm soát ra vào bằng mã QR tại công ty sản xuất **TMC** (hai nhà máy Bình Dương và Long An).
 
+- **Report kiến trúc:** [Source LaTeX và hướng dẫn build](report/README.md) nằm trong `report/`, cùng repo với `src/` và `tests/` để đối chiếu thiết kế với code.
 - **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật. Lưu trữ SQLite (Package 4) đang được hoàn thiện; các test hiện tại của M1/M3 chạy trên fake repository và fake controller.
 - **Trạng thái hiện tại:** Package 2, 4, 5 còn TODO, nên kịch bản demo Swagger ở mục 6 chỉ chạy được sau khi các package này được merge.
 - **Thành phần hỗ trợ demo:** Bộ cấp mã QR Ed25519 (một thành phần của `M4 QrCredentialIssuance`) và bộ mô phỏng cửa xoay `TurnstileAdapter` (`M2 Turnstile Integration`) chỉ kích hoạt ở chế độ demo (`demo_mode=True`).
