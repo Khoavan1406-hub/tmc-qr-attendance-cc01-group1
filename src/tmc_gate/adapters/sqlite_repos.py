@@ -86,6 +86,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             closure_status TEXT NOT NULL,
             observation_deadline TEXT NOT NULL,
             lane_clear_received INTEGER NOT NULL DEFAULT 0
+            -- TODO(pkg4): add close_command_id TEXT and save/load GateCycle.closeCommandId,
+            -- so a repeated LANE_CLEAR after restart queries the stored close command instead of sending a new one.
         );
 
         CREATE TABLE IF NOT EXISTS gate_commands (
@@ -105,6 +107,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             cycle_id TEXT NOT NULL,
             lane_id TEXT NOT NULL,
             occurred_at TEXT NOT NULL
+            -- TODO(pkg4): persist the LATE_PASSAGE review flag (e.g. late_flag / review_reason column)
+            -- durably, not only in memory; shape is fixed in PR2.
         );
 
         CREATE TABLE IF NOT EXISTS attendance_transactions (
@@ -207,6 +211,12 @@ class SqliteScanRepository(IScanRepository):
                 """,
                 (lane.laneId, lane.stationId, lane.factoryId, lane.direction.value, lane.activeCycleId),
             )
+
+    def get_command(self, commandId: str) -> GateCommand | None:
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_command (keep issued_at)")
+
+    def save_command(self, command: GateCommand) -> None:
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_command (history only)")
 
     def get_scan(self, scanId: str) -> ScanAttempt | None:
         """TODO [Package 4]: Query `scan_attempts` by `scan_id` and return `ScanAttempt` or `None`."""

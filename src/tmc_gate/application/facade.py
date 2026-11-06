@@ -2,7 +2,7 @@
 
 from datetime import datetime
 
-from tmc_gate.application.processor import GateTransactionProcessor, _NoOpUnitOfWork
+from tmc_gate.application.processor import GateTransactionProcessor
 from tmc_gate.domain.enums import DedupStatus, ScanState
 from tmc_gate.domain.models import ScanResult, SupportCase
 from tmc_gate.domain.snapshot import EligibilitySnapshot
@@ -24,13 +24,13 @@ class GateCoreFacade(GateCoreApi):
         scan_repo: IScanRepository,
         snapshot_repo: ISnapshotRepository,
         outbox_repo: IOutboxRepository,
-        uow: IUnitOfWork | None = None,
+        uow: IUnitOfWork,
     ) -> None:
         self._processor = processor
         self._scan_repo = scan_repo
         self._snapshot_repo = snapshot_repo
         self._outbox_repo = outbox_repo
-        self._uow: IUnitOfWork = uow or _NoOpUnitOfWork()
+        self._uow: IUnitOfWork = uow
 
     # --- IScanSubmission (StationClient) ---
 

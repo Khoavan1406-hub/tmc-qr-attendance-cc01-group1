@@ -65,8 +65,9 @@ class CommandType(StrEnum):
 class CommandOutcome(StrEnum):
     """Controller command outcomes distinguishing receipt, confirmed opening/closing, failure, and uncertainty (§7.1.3 LSP)."""
 
+    # Stored states of a GateCommand only; a port never returns these two values.
     SENT = "SENT"
-    RECEIPT_ONLY = "RECEIPT_ONLY"
+    NOT_SENT = "NOT_SENT"
     OPEN_CONFIRMED = "OPEN_CONFIRMED"
     CLOSED = "CLOSED"
     EMERGENCY_RELEASED = "EMERGENCY_RELEASED"

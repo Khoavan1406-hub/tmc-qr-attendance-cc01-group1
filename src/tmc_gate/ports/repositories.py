@@ -132,6 +132,14 @@ class IScanRepository(ABC):
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
         """Retrieve a stored SupportCase by supportCaseId."""
 
+    @abstractmethod
+    def get_command(self, commandId: str) -> GateCommand | None:
+        """Find a stored GateCommand by commandId (open, close, emergency), with its original issuedAt."""
+
+    @abstractmethod
+    def save_command(self, command: GateCommand) -> None:
+        """Stage a GateCommand outcome as history only; never changes a GateCycle or the lane reservation."""
+
     def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
         """Find a previously issued GateCommand for a supportCaseId (to handle repeated requestAssistedOpen idempotently per §4.2.3)."""
         return None

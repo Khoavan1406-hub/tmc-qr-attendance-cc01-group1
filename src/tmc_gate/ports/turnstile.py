@@ -14,13 +14,23 @@ from datetime import datetime
 
 from tmc_gate.domain.enums import CommandOutcome
 
+# Final results each port may return (shared by contract tests). Never SENT / NOT_SENT.
+OPEN_RESULTS = frozenset({CommandOutcome.OPEN_CONFIRMED, CommandOutcome.CONTROLLER_ERROR, CommandOutcome.UNDETERMINED})
+CLOSE_RESULTS = frozenset({CommandOutcome.CLOSED, CommandOutcome.CONTROLLER_ERROR, CommandOutcome.UNDETERMINED})
+RELEASE_RESULTS = frozenset({CommandOutcome.EMERGENCY_RELEASED, CommandOutcome.CONTROLLER_ERROR, CommandOutcome.UNDETERMINED})
+RESET_RESULTS = frozenset({CommandOutcome.RESET_CONFIRMED, CommandOutcome.CONTROLLER_ERROR, CommandOutcome.UNDETERMINED})
+
 
 class IOpenGate(ABC):
     """Contract for issuing a normal gate opening command (§7.1.4 ISP)."""
 
     @abstractmethod
-    def openGate(self, commandId: str, laneId: str) -> CommandOutcome:
+    def openGate(self, commandId: str, laneId: str, timeout_ms: int) -> CommandOutcome:
         """Send openGate command to the controller for a reserved lane.
+
+        Returns only OPEN_CONFIRMED | CONTROLLER_ERROR | UNDETERMINED (OPEN_RESULTS).
+        timeout_ms: Flow A passes min(700 ms, remaining scan deadline); assisted opening passes its own timeout.
+        If no confirmation arrives within timeout_ms, return UNDETERMINED. A receipt alone is internal to the adapter.
 
         LSP behavioral rules (§7.1.3):
         - Must distinguish command receipt from OPEN_CONFIRMED (receipt-only returns UNDETERMINED).
@@ -35,7 +45,7 @@ class ICloseGate(ABC):
 
     @abstractmethod
     def closeGate(self, commandId: str, laneId: str) -> CommandOutcome:
-        """Send closeGate once after LANE_CLEAR is recorded; returns CLOSED, CONTROLLER_ERROR, or UNDETERMINED."""
+        """Send closeGate once after LANE_CLEAR is recorded; returns only CLOSE_RESULTS (CLOSED | CONTROLLER_ERROR | UNDETERMINED)."""
 
 
 class IEmergencyGate(ABC):
@@ -43,11 +53,11 @@ class IEmergencyGate(ABC):
 
     @abstractmethod
     def emergencyRelease(self, commandId: str, laneId: str) -> CommandOutcome:
-        """Trigger emergency release on the specified lane."""
+        """Trigger emergency release; returns only RELEASE_RESULTS (EMERGENCY_RELEASED | CONTROLLER_ERROR | UNDETERMINED)."""
 
     @abstractmethod
     def resetEmergency(self, commandId: str, laneId: str) -> CommandOutcome:
-        """Confirm reset of emergency release mode on the specified lane."""
+        """Request reset of release mode; returns only RESET_RESULTS. A reset request is not a confirmed reset."""
 
 
 class IPassageEvents(ABC):
@@ -57,8 +67,12 @@ class IPassageEvents(ABC):
     - onPassage: each passageEventId is accepted at most once (repeated passageEventId is ignored).
       At most one original AttendanceTransaction is created per scanId. A second distinct passageEventId
       for the same scan is stored as PassageEvent evidence and flags the scan for review.
-      If LANE_CLEAR already closed the lane before PASSAGE arrived, onPassage records the passage and
-      attendance without re-locking the closed lane.
+      Automatic attendance is created only for a reliable PASSAGE received within the 15-second
+      observation window while the scan is still OPENED. A late PASSAGE (passageStatus NO_PASSAGE),
+      or one arriving after the scan moved to PENDING_RECONCILIATION (e.g. after emergency release),
+      is stored once with an audit record and flagged LATE_PASSAGE for review; no attendance is created,
+      the 15-second timer is not restarted and no closeGate is sent (Table 4.23b; handled in PR2).
+      If LANE_CLEAR already closed the lane, onPassage never re-locks it; a closed lane stays released.
     - onLaneClear: if the lane is in EMERGENCY_HOLD, normal closing is blocked until resetEmergency is confirmed.
       Otherwise records LANE_CLEAR and sends closeGate once.
     """
@@ -86,8 +100,9 @@ class IPassageEvents(ABC):
 class IControllerStatusQuery(ABC):
     """Optional port for querying command execution status when an outcome is UNDETERMINED (§7.1.3, I-03).
 
-    If the adapter does not support status queries (or the query still returns UNDETERMINED),
-    GateTransactionProcessor routes the scan to PENDING_RECONCILIATION without resending the command.
+    If the adapter does not support status queries, or the query still returns UNDETERMINED,
+    GateTransactionProcessor stores UNDETERMINED first and then moves the scan to PENDING_RECONCILIATION.
+    The command is never resent.
     """
 
     @abstractmethod

@@ -6,9 +6,9 @@ import pytest
 def test_turnstile_contract_illustrates_lsp_across_two_adapters() -> None:
     """TODO [Package 5]:
     Write a shared contract test (separating mandatory `ITurnstileControl` rules and optional `IControllerStatusQuery`)
-    and run each scenario against both `SimulatedTurnstileAdapter` (compliant) and `FaultyTurnstileAdapter` (faulty)
-    to illustrate Liskov Substitution Principle (LSP):
-    - `RECEIPT_ONLY` past budget returns `UNDETERMINED` (never treated as opened).
+    and run each scenario against both `SimulatedTurnstileAdapter` and `FaultyTurnstileAdapter` (compliant, fault-injecting);
+    both must pass (LSP). Assert results are within OPEN_RESULTS / CLOSE_RESULTS / RELEASE_RESULTS / RESET_RESULTS:
+    - receipt-only past `timeout_ms` returns `UNDETERMINED` (never treated as opened).
     - `TIMEOUT` returns `UNDETERMINED` (never treated as `CONTROLLER_ERROR`).
     - Explicit `ERROR` returns `CONTROLLER_ERROR`.
     """
