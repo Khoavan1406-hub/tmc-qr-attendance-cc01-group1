@@ -9,6 +9,7 @@ from tmc_gate.adapters.cross_cutting_stubs import (
     InMemoryAuthorizationStub,
     InMemoryHealthStub,
 )
+from tmc_gate.adapters.demo_guard_sessions import DemoGuardSessionStub
 from tmc_gate.adapters.demo_qr_issuer import QrCredentialIssuance
 from tmc_gate.adapters.sqlite_repos import (
     SqliteAttendanceRepository,
@@ -30,16 +31,20 @@ from tmc_gate.application.processor import GateTransactionProcessor
 from tmc_gate.domain.enums import Direction
 from tmc_gate.domain.models import Lane
 from tmc_gate.domain.snapshot import EligibilitySnapshot, EmployeeRight
+from tmc_gate.ports.repositories import IGuardIdentityApi
 
 
 def create_app(
     db_path: str = ":memory:",
     factory_id: str = "BD",
     demo_mode: bool = True,
+    guard_identity: IGuardIdentityApi | None = None,
 ) -> FastAPI:
     """Wire ports and adapters using Constructor Dependency Injection (DIP) and return the FastAPI app.
 
     Simulator / QR issuance endpoints in demo_controller are mounted ONLY when demo_mode=True.
+    Guard sessions: an injected identity provider is used when given; otherwise the fixed demo sessions are
+    accepted only when demo_mode=True, and outside demo mode intervention calls are refused (HTTP 503).
     """
     conn = create_sqlite_connection(db_path)
     init_sqlite_schema(conn)
@@ -156,7 +161,11 @@ def create_app(
 
     # Register Entry Layer Routers
     fastapi_app.include_router(build_gate_core_router(scan_submission=gate_core_facade, signal_handler=processor))
-    fastapi_app.include_router(build_intervention_router(facade=intervention_facade))
+    # Guard sign-in is simulated in M2 (fixed demo sessions) and only in demo mode; a real identity provider
+    # is out of scope and must be injected through guard_identity.
+    if guard_identity is None and demo_mode:
+        guard_identity = DemoGuardSessionStub()
+    fastapi_app.include_router(build_intervention_router(facade=intervention_facade, guard_identity=guard_identity))
     if demo_mode:
         fastapi_app.include_router(
             build_demo_router(

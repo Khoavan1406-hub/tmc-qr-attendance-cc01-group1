@@ -63,13 +63,20 @@ class FakeUnitOfWork(IUnitOfWork):
         self.committed: int = 0
         self.rolled_back: int = 0
 
+        self.in_transaction: bool = False
+
     def begin(self, timeout_ms: int | None = None) -> None:
+        # Like SQLite BEGIN IMMEDIATE: a transaction left open by an earlier call must fail the next one.
+        assert not self.in_transaction, "cannot start a transaction within a transaction"
+        self.in_transaction = True
         self.begun += 1
 
     def commit(self) -> None:
+        self.in_transaction = False
         self.committed += 1
 
     def rollback(self) -> None:
+        self.in_transaction = False
         self.rolled_back += 1
 
 

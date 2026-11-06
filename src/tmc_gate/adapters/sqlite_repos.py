@@ -218,6 +218,10 @@ class SqliteScanRepository(IScanRepository):
     def save_command(self, command: GateCommand) -> None:
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_command (history only)")
 
+    def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
+        """TODO [Package 4]: Query `gate_commands` by `support_case_id` and `command_type`; return `GateCommand` or `None`."""
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_command_by_support_case")
+
     def get_scan(self, scanId: str) -> ScanAttempt | None:
         """TODO [Package 4]: Query `scan_attempts` by `scan_id` and return `ScanAttempt` or `None`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_scan")
@@ -292,7 +296,11 @@ class SqliteScanRepository(IScanRepository):
         outboxEvent: dict[str, object] | None = None,
         auditPayload: dict[str, object] | None = None,
     ) -> None:
-        """TODO [Package 4]: Stage `SupportCase` (and optional `outboxEvent`, `auditPayload`) in `support_cases`."""
+        """TODO [Package 4]: Stage `SupportCase` (and optional `outboxEvent`, `auditPayload`) in `support_cases`.
+
+        Insert only (PRIMARY KEY supportCaseId), never INSERT OR REPLACE: Gate Core checks for an existing case
+        in the same Unit of Work and must never overwrite stored evidence.
+        """
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_support_case")
 
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
