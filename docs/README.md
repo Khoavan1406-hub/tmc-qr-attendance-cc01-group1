@@ -1,29 +1,30 @@
-# Context bàn giao Package 1 — Brian
+# Tài Liệu Bàn Giao Kỹ Thuật (Work Packages Context & Verification)
 
-Tài liệu giúp người hoặc AI tiếp quản hiểu phần Eligibility Snapshot mà không cần đọc lại hội thoại. Mốc ghi nhận: **05/11/2026**, code triển khai tại commit `7b55b5d`. Đây là context của Package 1, không phải xác nhận toàn hệ thống đã hoàn thiện.
+Thư mục này lưu trữ tài liệu bàn giao, bối cảnh quyết định kiến trúc và kết quả kiểm chứng chi tiết của từng Gói công việc (Work Package) trong dự án **TMC Gate Core (Milestone 2 – Task 2)**.
 
-## Thứ tự đọc
+---
 
-1. [Yêu cầu, Contracts và quyết định triển khai](pkg1-snapshot-context.md).
-2. [Cách kiểm chứng và kết quả đã ghi nhận](pkg1-verification.md).
-3. [Code snapshot](../src/tmc_gate/domain/snapshot.py) và [unit test Package 1](../tests/test_pkg1_snapshot.py).
-4. [Quy tắc kiến trúc](../ARCHITECTURE_RULES.md) và các file của package cần tích hợp.
+## 1. Package 6 — Gate Intervention (M3 Flow B) & Report Finalization
 
-## Phạm vi bàn giao
+* **Phụ trách:** Bửu
+* **Nhánh Git:** `feat/pkg6-intervention-tests`
+* **Tài liệu chi tiết:**
+  1. [M3 Gate Intervention: Yêu cầu, Contracts và Quyết định Thiết kế](pkg6-intervention-context.md).
+  2. [Kiểm chứng Package 6 và Kết quả Test Tự Động](pkg6-verification.md).
+* **Mã nguồn chính:**
+  * Application: [`src/tmc_gate/application/intervention.py`](../src/tmc_gate/application/intervention.py) (`InterventionService`, `GateInterventionFacade`).
+  * API Controller: [`src/tmc_gate/api/intervention_controller.py`](../src/tmc_gate/api/intervention_controller.py) (`build_intervention_router`).
+  * Tests: [`tests/test_pkg6_intervention.py`](../tests/test_pkg6_intervention.py) (4/4 passed).
 
-- Chủ nhiệm: Brian, **Package 1 — Eligibility Snapshot Rules**.
-- Nhánh: `feat/pkg1-snapshot-rules`, đích tích hợp: `dev`.
-- File triển khai: `src/tmc_gate/domain/snapshot.py`.
-- File test: `tests/test_pkg1_snapshot.py`.
-- Package 2 dùng snapshot trong `AccessDecision`; Package 3 điều phối luồng cổng và chốt Contracts dùng chung.
-- Không nhận thêm TODO của Package 2–6 chỉ vì chúng chưa hoàn thành.
+---
 
-Nguồn yêu cầu là dòng Package 1 trong `M2 TASK TRACKER - BTL 2.csv` do người dùng cung cấp. Tại thời điểm bàn giao, CSV là file local chưa được Git track và không nằm trong commit tài liệu. Nội dung cần thiết đã được chép lại trong context để tài liệu vẫn đọc độc lập được.
+## 2. Package 1 — Eligibility Snapshot Rules
 
-Scaffold, README gốc và `ARCHITECTURE_RULES.md` còn mô tả ngưỡng cũ ở một số chỗ. Với Package 1, dùng các ngưỡng theo tracker được ghi rõ trong [context](pkg1-snapshot-context.md); không khôi phục logic cũ chỉ để khớp comment cũ.
-
-## Khi tiếp quản
-
-Đọc code và chạy test trước khi sửa. Phân biệt yêu cầu tracker với các quyết định bổ sung đã được ghi riêng; nếu đổi Contracts, phối hợp với các package sử dụng chúng.
-
-Theo yêu cầu bàn giao hiện tại, chỉ tạo commit local; người dùng tự quản lý push và PR. Không thêm trailer `Co-authored-by` vào commit. Không suy diễn việc hoàn thành task thành quyền merge `dev` hoặc `main`.
+* **Phụ trách:** Brian
+* **Nhánh Git:** `feat/pkg1-snapshot-rules` (đã merge vào `dev`)
+* **Tài liệu chi tiết:**
+  1. [Yêu cầu, Contracts và quyết định triển khai](pkg1-snapshot-context.md).
+  2. [Cách kiểm chứng và kết quả đã ghi nhận](pkg1-verification.md).
+* **Mã nguồn chính:**
+  * Domain: [`src/tmc_gate/domain/snapshot.py`](../src/tmc_gate/domain/snapshot.py) (`EligibilitySnapshot`).
+  * Tests: [`tests/test_pkg1_snapshot.py`](../tests/test_pkg1_snapshot.py) (146/146 passed).

@@ -28,32 +28,54 @@ def build_intervention_router(facade: GateInterventionFacade) -> APIRouter:
 
     @router.post("/api/interventions/assisted-open", tags=["M3 - Gate Intervention (Flow B)"])
     def assisted_open(req: AssistedAccessRequest) -> dict[str, object]:
-        """Guard records assisted access case and opens the gate (does not create attendance without HR approval).
-
-        TODO [Package 6]:
-        Delegate to `facade.recordAssistedAccessAndOpen(...)` and return dict with
-        `supportCaseId`, `state`, `laneId`, `commandId`, `reason`.
-        """
-        raise NotImplementedError("TODO [Package 6]: Implement POST /api/interventions/assisted-open")
+        """Guard records assisted access case and opens the gate (does not create attendance without HR approval)."""
+        result = facade.recordAssistedAccessAndOpen(
+            supportCaseId=req.supportCaseId,
+            guardId=req.guardId,
+            employeeId=req.employeeId,
+            laneId=req.laneId,
+            reason=req.reason,
+            linkedScanId=req.linkedScanId,
+        )
+        return {
+            "supportCaseId": req.supportCaseId,
+            "state": result.state.value if hasattr(result.state, "value") else str(result.state),
+            "laneId": result.laneId,
+            "commandId": result.commandId,
+            "reason": result.reason,
+        }
 
     @router.post("/api/interventions/emergency-release", tags=["M3 - Gate Intervention (Flow B)"])
     def emergency_release(req: EmergencyActionRequest) -> dict[str, object]:
-        """Guard triggers emergencyRelease -> puts lane in EMERGENCY_HOLD.
-
-        TODO [Package 6]:
-        Delegate to `facade.emergencyRelease(...)` and return dict with
-        `supportCaseId`, `state`, `laneId`, `commandId`, `reason`.
-        """
-        raise NotImplementedError("TODO [Package 6]: Implement POST /api/interventions/emergency-release")
+        """Guard triggers emergencyRelease -> puts lane in EMERGENCY_HOLD."""
+        result = facade.emergencyRelease(
+            supportCaseId=req.supportCaseId,
+            guardId=req.guardId,
+            laneId=req.laneId,
+            reason=req.reason,
+        )
+        return {
+            "supportCaseId": req.supportCaseId,
+            "state": result.state.value if hasattr(result.state, "value") else str(result.state),
+            "laneId": result.laneId,
+            "commandId": result.commandId,
+            "reason": result.reason,
+        }
 
     @router.post("/api/interventions/emergency-reset", tags=["M3 - Gate Intervention (Flow B)"])
     def emergency_reset(req: EmergencyActionRequest) -> dict[str, object]:
-        """Guard confirms incident is over and resets EMERGENCY_HOLD on the lane.
-
-        TODO [Package 6]:
-        Delegate to `facade.resetEmergency(...)` and return dict with
-        `supportCaseId`, `state`, `laneId`, `commandId`, `reason`.
-        """
-        raise NotImplementedError("TODO [Package 6]: Implement POST /api/interventions/emergency-reset")
+        """Guard confirms incident is over and resets EMERGENCY_HOLD on the lane."""
+        result = facade.resetEmergency(
+            supportCaseId=req.supportCaseId,
+            guardId=req.guardId,
+            laneId=req.laneId,
+        )
+        return {
+            "supportCaseId": req.supportCaseId,
+            "state": result.state.value if hasattr(result.state, "value") else str(result.state),
+            "laneId": result.laneId,
+            "commandId": result.commandId,
+            "reason": result.reason,
+        }
 
     return router
