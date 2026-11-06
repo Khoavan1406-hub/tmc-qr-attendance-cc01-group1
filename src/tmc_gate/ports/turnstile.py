@@ -67,8 +67,12 @@ class IPassageEvents(ABC):
     - onPassage: each passageEventId is accepted at most once (repeated passageEventId is ignored).
       At most one original AttendanceTransaction is created per scanId. A second distinct passageEventId
       for the same scan is stored as PassageEvent evidence and flags the scan for review.
-      If LANE_CLEAR already closed the lane before PASSAGE arrived, onPassage records the passage and
-      attendance without re-locking the closed lane.
+      Automatic attendance is created only for a reliable PASSAGE received within the 15-second
+      observation window while the scan is still OPENED. A late PASSAGE (passageStatus NO_PASSAGE),
+      or one arriving after the scan moved to PENDING_RECONCILIATION (e.g. after emergency release),
+      is stored once with an audit record and flagged LATE_PASSAGE for review; no attendance is created,
+      the 15-second timer is not restarted and no closeGate is sent (Table 4.23b; handled in PR2).
+      If LANE_CLEAR already closed the lane, onPassage never re-locks it; a closed lane stays released.
     - onLaneClear: if the lane is in EMERGENCY_HOLD, normal closing is blocked until resetEmergency is confirmed.
       Otherwise records LANE_CLEAR and sends closeGate once.
     """
