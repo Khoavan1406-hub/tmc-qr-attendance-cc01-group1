@@ -74,6 +74,7 @@ class GateCycle:
     scanId: str | None = None
     supportCaseId: str | None = None
     laneClearReceived: bool = False
+    closeCommandId: str | None = None
 
     def is_active_or_unresolved(self) -> bool:
         """Return True while the lane must remain reserved/busy (§4.2.2 Lane rules)."""

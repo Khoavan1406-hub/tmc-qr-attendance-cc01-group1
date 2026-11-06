@@ -64,6 +64,8 @@ class GateTransactionProcessor(IPassageEvents):
     PASSAGE_OBSERVATION_WINDOW_SEC: int = 15
     SCAN_DEADLINE_BUDGET_MS: int = 2_000
     SCAN_DEADLINE_BUDGET_SEC: float = 2.0
+    OPEN_COMMAND_BUDGET_MS: int = 700  # Flow A only (Table 5.5)
+    ASSISTED_OPEN_TIMEOUT_MS: int = 3_000  # Flow B assisted opening, configurable
 
     def __init__(
         self,
@@ -307,7 +309,7 @@ class GateTransactionProcessor(IPassageEvents):
             )
 
         # Step A5: Invoke controller openGate port outside DB transaction after ACCEPTED is durably stored
-        outcome = self._open_gate_port.openGate(commandId=command_id, laneId=laneId)
+        outcome = self._open_gate_port.openGate(commandId=command_id, laneId=laneId, timeout_ms=min(700, remaining_ms))
         if outcome == CommandOutcome.UNDETERMINED and self._status_query_port is not None:
             outcome = self._status_query_port.queryStatus(commandId=command_id, laneId=laneId)
 
@@ -663,7 +665,7 @@ class GateTransactionProcessor(IPassageEvents):
             self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
             self._uow.commit()
 
-        outcome = self._open_gate_port.openGate(commandId=cmd_id, laneId=laneId)
+        outcome = self._open_gate_port.openGate(commandId=cmd_id, laneId=laneId, timeout_ms=self.ASSISTED_OPEN_TIMEOUT_MS)
         if outcome == CommandOutcome.UNDETERMINED and self._status_query_port is not None:
             outcome = self._status_query_port.queryStatus(commandId=cmd_id, laneId=laneId)
 
@@ -749,7 +751,3 @@ class GateTransactionProcessor(IPassageEvents):
             commandId=cmd_id,
             reason=ClosureStatus.EMERGENCY_HOLD.value,
         )
-
-    def resetEmergency(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
-        """Alias forwarding to requestEmergencyReset."""
-        return self.requestEmergencyReset(supportCaseId=supportCaseId, laneId=laneId, now=now)

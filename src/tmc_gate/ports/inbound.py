@@ -67,14 +67,6 @@ class IInterventionRequest(ABC):
     ) -> ScanResult:
         """Request reset of emergency release mode; exits EMERGENCY_HOLD only when controller confirms RESET_CONFIRMED."""
 
-    def resetEmergency(
-        self,
-        supportCaseId: str,
-        laneId: str,
-        now: datetime | None = None,
-    ) -> ScanResult:
-        """Alias forwarding to requestEmergencyReset for Table 4.20 compatibility."""
-        return self.requestEmergencyReset(supportCaseId=supportCaseId, laneId=laneId, now=now)
 
 
 class IFactoryUpdates(ABC):
