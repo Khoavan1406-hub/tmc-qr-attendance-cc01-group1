@@ -1,0 +1,42 @@
+\section*{9. CONCLUSION}
+
+\phantomsection
+\addcontentsline{toc}{section}{9. CONCLUSION}
+
+This report presents our architecture for TMC's QR-based attendance and access control system at its two factories. It covers the context and requirements, the architecture characteristics, the choice of style, the logical and physical architecture, the main decisions, and the design principles.
+
+\subsection*{9.1. Summary of the Architecture}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.1. Summary of the Architecture}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Characteristics.} The six drivers are reliability and data integrity, availability, performance, security and privacy, auditability, and interoperability. A scan has to be answered within 2 seconds, and accepted records must survive a factory's WAN outage.
+  \item \textbf{Style.} Six styles were compared, and we chose Service-based Architecture with Event-driven Integration: a gate application and database at each factory, one central application, and three event feeds between them. Inside, each application is a Modular Monolith.
+  \item \textbf{Logical architecture.} Thirteen modules communicate through public interfaces and two ports, and the C\&C View describes three runtime flows. The gate flow keeps four facts apart: the controller received the command, the gate opened, an employee passed, and the gate closed. Only a linked passage creates automatic attendance (I-07), and an uncertain opening is checked or reconciled, never resent.
+  \item \textbf{Physical architecture.} Each factory has a primary and a standby server. The central site has a reverse proxy pair, two application instances, a database pair, a broker, monitoring, and backups. The 2-second budget is split over the factory-local path with a 200 ms reserve, and a bounded degraded mode keeps the gates working for up to 30 minutes when the WAN link fails (I-10).
+  \item \textbf{Decisions and principles.} Eleven ADRs record the main choices and their trade-offs. SOLID, cohesion, and coupling keep the module boundaries clear, while short-lived factory-bound QR codes, server-side authorization, audit at the source, and data minimization protect access and personal data.
+\end{itemize}
+
+The design gives up the simplicity of a single deployment and accepts that central data lags behind the gates. In return, scans stay on the factory LAN, each factory keeps working when its link fails, and every gate record is stored before it leaves the factory.
+
+\Needspace{9\baselineskip}
+\subsection*{9.2. Limitations and Open Issues}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.2. Limitations and Open Issues}
+
+
+The design still needs API verification and implementation tests. The main open points are:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{External contracts.} Command receipt, opening confirmation, passage and lane-clear events, close confirmation, status lookup, and duplicate protection must be verified with the real controller (I-01, I-05), and HR/Payroll receipt semantics must be checked (I-02), including whether an acknowledgement means that the data is ready for reconciliation (IC-01).
+  \item \textbf{Gate evidence.} Closing after LANE\_CLEAR with the controller's safety interlock, and counting attendance only after passage, are our assumptions, not capabilities stated in the assignment. If the API has no reliable passage evidence, TMC must add a verified passage sensor before automatic QR attendance is enabled. Until then, cases need documented assistance and HR approval, and OPEN\_CONFIRMED never creates provisional attendance. If safe-closing signals are missing, the closing procedure must be redesigned and tested before operation.
+  \item \textbf{Business and display rules.} TMC must confirm whether shifts restrict physical access as well as attendance aggregation (I-06), and whether the QR code must be shown directly in company email rather than through an authenticated link (I-08).
+  \item \textbf{Degraded mode.} TMC must approve the 60-second and 30-minute limits (I-10). The longer limit keeps the gates open through one shift-change peak, but a revocation made during an outage may take up to 30 minutes to reach the factory. After 30 minutes, guards use the manual procedure, which needs a staffing plan. Both time boundaries, the DEGRADED flag, and the review cases created after reconnection still need testing.
+  \item \textbf{Anti-replay.} Factory-bound, single-use QR tokens must be tested under concurrent scans, failover, and backup restore before disconnected operation is enabled.
+  \item \textbf{Operational targets.} The response-time, failover, recovery, and backup targets must be measured with representative loads and failures.
+  \item \textbf{Infrastructure.} Synchronous replication makes the standby part of every write. When the synchronous commit cannot be met, new scans that would open a gate stop (Section 5.6.2), and TMC must accept this operational impact. Controller links without TLS need network isolation and restricted access.
+  \item \textbf{Data retention.} TMC must confirm retention periods for attendance, support records, audit logs, and backups.
+\end{itemize}
+

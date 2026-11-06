@@ -1,0 +1,339 @@
+\begingroup\widowpenalty=10000\clubpenalty=10000
+\Needspace{9\baselineskip}
+\section*{3. ARCHITECTURE STYLE COMPARISON AND SELECTION}
+
+\phantomsection
+\addcontentsline{toc}{section}{3. ARCHITECTURE STYLE COMPARISON AND SELECTION}
+
+
+TMC has two kinds of work, and the chosen style has to serve both without breaking the rules for recording attendance:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Gate work:} a scan must be checked and answered within 2 seconds, right next to the turnstile.
+  \item \textbf{Office work:} attendance is consolidated, reviewed, reported, and handed over to HR/Payroll, and this can happen minutes or hours later.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{3.1. Evaluation Basis and Candidate Styles}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{3.1. Evaluation Basis and Candidate Styles}
+
+\subsubsection*{3.1.1. Comparison Criteria}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{3.1.1. Comparison Criteria}
+
+
+The styles are rated on seven criteria:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{AC-01 -- Reliability and Data Integrity.}
+  \item \textbf{AC-02 -- Availability.}
+  \item \textbf{AC-03 -- Performance.}
+  \item \textbf{AC-04 -- Security and Privacy.}
+  \item \textbf{AC-05 -- Auditability.}
+  \item \textbf{AC-06 -- Interoperability.}
+  \item \textbf{Cost:} the work needed to deploy, test, monitor, back up, and recover each deployment unit.
+\end{itemize}
+
+The comparison is qualitative. We rate each style as Good, Fair, or Weak on each criterion and do not add the ratings into a score.
+
+\Needspace{9\baselineskip}
+\subsubsection*{3.1.2. One Deployment Unit or Several}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{3.1.2. One Deployment Unit or Several}
+
+
+A style either keeps the whole system in one deployment unit or splits it into several:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Monolith:} one deployment unit. Calls stay inside one process, one database transaction can cover a scan and its audit record, and there is only one thing to deploy.
+  \item \textbf{Distributed system:} several units that talk over the network. It has to deal with the fallacies of distributed computing: the network fails, latency is not zero, and contracts between units need versions.
+\end{itemize}
+
+The distributed cost is only worth paying when parts of the system need different characteristics. At TMC they do: a scan must finish within 2 seconds beside the turnstile and keep working when the WAN link fails, while reports and the HR/Payroll handover can wait. The load is not the reason. The peak is about 1.3 completed entries and exits per second per factory, plus rejected and resubmitted scans, which fits on one server.
+
+\Needspace{9\baselineskip}
+\subsubsection*{3.1.3. Candidate Styles}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{3.1.3. Candidate Styles}
+
+
+We looked at six styles: Layered Monolith, Modular Monolith, Microkernel, Service-based, Microservices, and Event-driven.
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item For the three monolithic styles we assume the usual setup: one application and one database at the central site, and every scan sent there by the kiosk.
+  \item A Modular Monolith at each factory next to a central one is no longer one monolith. It has three applications, each with its own database, talking over versioned contracts, which is what Service-based Architecture describes. We compare it under that name and keep Modular Monolith as the structure inside each application.
+\end{itemize}
+
+\subsection*{3.2. Architecture Style Comparison}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{3.2. Architecture Style Comparison}
+
+Each style below is described by what it is, its strengths and weaknesses, and how well it fits TMC.
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Layered Monolith}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} one application, one database, and one deployment; code is split by technical layer.
+  \item \textbf{Strengths:} the easiest style to build and run. A scan and its audit record can be saved in one transaction (AC-01, AC-05).
+  \item \textbf{Weaknesses:} every scan goes to the central site and back, so the 2-second limit includes the WAN round trip, and a WAN outage stops every lane at that factory (AC-02, AC-03). A business change such as assisted opening has to go through every layer.
+  \item \textbf{Fit for TMC:} suits the office work, but not the gates.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Modular Monolith}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} the same deployment as Layered, but the code is split by business area, such as gate processing, attendance, reporting, and handover.
+  \item \textbf{Strengths:} each module has its own interface and tables, so a change usually stays inside one module, and the controller and HR/Payroll adapters can sit in their own modules (AC-06).
+  \item \textbf{Weaknesses:} everything still runs at the central site, so it has the same WAN problem as Layered. Offline kiosks could remove that dependency, but independent kiosk-local token claims cannot enforce I-09 across lanes; shared factory-side claim coordination is needed, which our factory application provides.
+  \item \textbf{Fit for TMC:} a good way to organize code inside one application, but on its own it does not meet AC-02.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Microkernel}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} a small core extended by plugins.
+  \item \textbf{Strengths:} plugin points are useful where things change often.
+  \item \textbf{Weaknesses:} at TMC we only expect change at the two external APIs, and adapters already cover those. Plugins run in the core's process, so a faulty plugin can affect the whole application. They also share the core's data and audit log, so the core must control what each plugin may read and must record (AC-01, AC-04, AC-05). The core is central, so the WAN problem remains.
+  \item \textbf{Fit for TMC:} fits the adapters, but not the system as a whole.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Service-based}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} a few coarse applications deployed separately. For TMC: one gate application with its own database at each factory, and one central application.
+  \item \textbf{Strengths:} the QR check, saving, and opening stay on the factory LAN, so a WAN outage does not stop the lanes and the 2-second limit excludes WAN latency (AC-02, AC-03). Each record is saved at the factory first and sent on later, so it is not lost when the link is down (AC-01, AC-05).
+  \item \textbf{Weaknesses:} applications and databases run at three sites, the local copy of access rights must be kept up to date, and central reports lag behind the gates.
+  \item \textbf{Fit for TMC:} Microservices and Event-driven could also place gate work at the factory, but Service-based gets there with fewer network hops and fewer parts to run.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Microservices}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} many small services, each with its own database.
+  \item \textbf{Strengths:} independent deployment and scaling.
+  \item \textbf{Weaknesses:} one gate transaction is spread over several services, which adds network calls to the 2-second path and makes it hard to save a scan and its audit record together. If any service on that path is down, the gate stops (AC-02), and the evidence for one scan ends up in several logs (AC-05). Every extra service is one more endpoint to secure (AC-04).
+  \item \textbf{Fit for TMC:} TMC needs neither independent deployment nor scaling at about 1.3 completed events per second per factory, so Microservices cost more than they give back.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+\noindent\begin{minipage}{\linewidth}
+\textbf{Event-driven}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Description:} the steps of the gate flow pass through a message broker at the factory.
+  \item \textbf{Strengths:} works well for data that can arrive later.
+  \item \textbf{Weaknesses:} the QR check and the opening command need an answer within 2 seconds. A queue only adds waiting, and the broker becomes one more component that can stop the gate (AC-02, AC-03). Each message must also be stored, protected, and traced from publishing to processing (AC-01, AC-04, AC-05).
+  \item \textbf{Fit for TMC:} events fit the exchange between sites, not the gate flow itself, so we use them only between the factories and the central site.
+\end{itemize}
+\end{minipage}
+
+\medskip
+
+Table 3.1 summarizes the ratings.
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+{\small
+\setlength{\tabcolsep}{3pt}
+\begin{tabular}{|>{\raggedright\arraybackslash}p{96pt}|*{7}{>{\centering\arraybackslash}p{40pt}|}}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{96pt}|}{\textbf{Style}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-01}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-02}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-03}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-04}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-05}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{AC-06}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{Cost}} \\
+\hline
+Layered Monolith (central) & Good & Weak & Fair & Good & Good & Good & Good \\
+\hline
+Modular Monolith (central) & Good & Weak & Fair & Good & Good & Good & Good \\
+\hline
+Microkernel (central) & Fair & Weak & Fair & Fair & Fair & Good & Fair \\
+\hline
+Service-based & Good & Good & Good & Fair & Good & Good & Fair \\
+\hline
+Microservices & Fair & Fair & Weak & Weak & Fair & Good & Weak \\
+\hline
+Event-driven (broker in the gate flow) & Fair & Fair & Weak & Fair & Fair & Fair & Weak \\
+\hline
+\end{tabular}
+}
+
+\vspace{6pt}
+\textbf{Table 3.1. Ratings of the Candidate Styles against the Driving Characteristics}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{3.1}Ratings of the Candidate Styles against the Driving Characteristics}
+
+{\small For Cost, Good means little extra effort.}
+
+\end{minipage}
+
+\Needspace{6\baselineskip}
+The ratings come down to three points:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Central styles:} cheapest, but all Weak on AC-02, because a WAN outage at shift change would stop every lane at that factory.
+  \item \textbf{Microservices and a broker in the gate flow:} solve the same gate problem as Service-based, but add network hops to the 2-second path and more parts to run.
+  \item \textbf{Service-based:} the only style without a Weak rating. Its Fair ratings come from running data at several sites: more places to protect (AC-04) and more to operate (cost).
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{3.3. Selected Style and Trade-offs}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{3.3. Selected Style and Trade-offs}
+
+
+\textbf{Decision.} We chose \textbf{Service-based Architecture with Event-driven Integration}:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Each factory runs one gate application with its own database.
+  \item The central site runs one application for access data, attendance, reports, and HR/Payroll handover.
+  \item Inside, each application is a Modular Monolith, so its code keeps clear business modules without network calls between them.
+  \item Service-based Architecture often lets all services share one database. We do not, because the WAN link sits between the factories and the central site, and a gate that must read a central database would stop with the link. Each factory owns its gate data; the central application owns the consolidated data.
+\end{itemize}
+
+\textbf{Rationale.}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{AC-01, AC-05:} saving each record where it happens and sending it on later protects it from loss and keeps the evidence.
+  \item \textbf{AC-02:} a fault at one factory does not stop the other, and the gates keep working when the factory's WAN link fails. A 60-second limit on local access-right data alone is too short, since any WAN outage longer than one minute would stop every lane. I-10 therefore adds a bounded degraded mode: the factory keeps accepting signed, unexpired, single-use QR codes and flags each transaction for review. Its 30-minute limit covers one full shift-change peak of about 800 scans.
+  \item \textbf{AC-03:} checking and opening at the factory takes the WAN off the scan path, which makes the 2-second limit reachable; whether it is met still depends on the controller, the database, and measurement.
+  \item \textbf{AC-04, AC-06:} login and permissions stay central, and both external systems sit behind adapters.
+\end{itemize}
+
+Degraded mode only covers the factory's WAN link. Employees' phones still reach the central site over the Internet or the mobile network, so they keep getting new QR codes. If the central application itself is down, no new codes can be issued, and the automatic flow stops within about 60 seconds, when the last codes expire. Guards then switch to TMC's manual procedure.
+
+\textbf{What we give up.}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item Data and applications have to be operated at three sites.
+  \item Central reports may lag, and access-right changes may reach a factory late.
+  \item Modules inside one application still share its resources.
+  \item During a WAN outage the factory can work in degraded mode only for a limited time (I-10).
+\end{itemize}
+
+ADR-01 records this decision.
+
+\Needspace{6\baselineskip}
+\textbf{When this choice holds.} If one of these conditions turns out to be false, the decision has to be revisited:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item The factory LAN between the gate application, the kiosks, and the controller stays up when the WAN link fails. The assignment does not say this, so we assume it.
+  \item TMC approves the 30-minute degraded mode in I-10 and accepts that an employee whose access was revoked during the window may still pass. Without it, the factory application still keeps the scan path on the LAN and keeps the two factories apart, but the gates stop after 60 seconds without updates.
+  \item Employees' phones can reach the central site over the Internet or the mobile network while the factory WAN link is down.
+  \item TMC can run and back up one server and one database at each factory.
+  \item The HR/Payroll handover can run hours after the gate events, so it never sits on the gate path.
+\end{itemize}
+
+\subsection*{3.4. Coupling and Architecture Quantum Analysis}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{3.4. Coupling and Architecture Quantum Analysis}
+
+Putting work into separate applications does not make them independent. For each kind of work in the two business flows, we checked what it waits for, where its data is stored, and which resources it shares.
+
+\Needspace{9\baselineskip}
+\subsubsection*{3.4.1. Application Boundaries}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{3.4.1. Application Boundaries}
+
+
+The work is split as follows:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Application at each factory:} checks the QR code and the employee's access right, stores the scan, drives the controller, records passage and closing, and handles assisted or emergency opening at the lane. Its database holds scan states, gate transactions, a local copy of access rights and lane configuration, audit evidence, and events waiting to be sent. Neither factory reads the other's database, so a failure at Binh Duong does not stop scans at Long An. Assisted and emergency opening are the exception: they still need central authorization.
+  \item \textbf{Central application:} access-right and configuration management, attendance consolidation and review, reporting, HR/Payroll handover, identity and RBAC, and the central audit log. These parts are deployed together and share one database engine, although each module owns its own tables. A failure of the central infrastructure therefore affects all of them at once; separating modules in code is not enough to count each module as its own quantum.
+  \item \textbf{Synchronization and monitoring:} each application has a synchronization part that exchanges events through the central broker, and Monitoring collects health data, errors, and progress. We do not count quanta by nodes but by the effect on work: if the broker stops, data reaches the other side later; if Monitoring stops, operators lose alerts.
+\end{itemize}
+
+\subsubsection*{3.4.2. Static and Dynamic Coupling}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{3.4.2. Static and Dynamic Coupling}
+
+\textbf{Static coupling.}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item The applications communicate only through published APIs and event contracts.
+  \item Each one reaches the controller or HR/Payroll through a port and an adapter (ADR-04), so a change in an external API stays inside its adapter.
+  \item Both factories can run the same code base. They do not need to be upgraded together as long as APIs and events stay compatible, so contracts carry version numbers.
+\end{itemize}
+
+\textbf{Dynamic coupling.} Table 3.2 lists the exchanges that decide whether an operation can finish.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{150.5pt}|>{\raggedright\arraybackslash}p{89.5pt}|>{\raggedright\arraybackslash}p{170.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{150.5pt}|}{\textbf{Exchange}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{89.5pt}|}{\textbf{Interaction type}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{170.5pt}|}{\textbf{Effect of interruption}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 3.2. Runtime Dependencies and the Effects of Interruption}} \\
+\endlastfoot
+Kiosk with the factory application; factory application with the controller & Synchronous for opening & Without the factory application or the controller, the kiosk cannot show a confirmed opening. Passage and closing may finish later and are recorded separately. \\
+\hline
+Factory sending gate transactions and support cases to the central site & Asynchronous & Consolidated data arrives later; events wait in the factory outbox. \\
+\hline
+Central site sending access rights and configuration to the factories & Asynchronous & The factory keeps using its local copy within I-10: normal mode for 60 seconds, then degraded mode until 30 minutes after the last confirmed update. \\
+\hline
+Central site sending reconciliation decisions; factory confirming that it applied them & Asynchronous & A case linked to a scan that the factory must update stays open until the factory confirms; the attendance change is tracked separately. \\
+\hline
+Assisted or emergency opening asking for central authorization & Synchronous & The operation waits until authorization is confirmed. \\
+\hline
+Employee requesting a new QR code from the central site & Synchronous & The employee cannot get a new code. If the central site is down, the automatic flow stops within about 60 seconds. \\
+\hline
+Handover calling the HR/Payroll API through its adapter & Defined by the integration contract & Handover is delayed or its outcome stays undetermined; kiosks never wait for it. \\*
+\hline\noalign{\nobreak}
+Sending audit and monitoring data & Asynchronous & Central views are delayed; the source keeps the audit evidence, and the factory deployment of Monitoring still shows alerts at the guard post. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{3.2}Runtime Dependencies and the Effects of Interruption}
+
+
+\textbf{Quanta.}
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Processing one scan with a QR code already issued: three quanta.} Each application is deployed on its own with its own data, and the factory application never calls the central one during such a scan. Each factory keeps scanning through a WAN outage (up to 30 minutes under I-10), and a fault at one factory does not affect the other.
+  \item \textbf{From issuing a QR code to passing the gate:} still depends on the central application, because employees get new codes from it. If it is down, scans stop within about 60 seconds.
+  \item \textbf{Assisted and emergency opening:} the factory application waits for central authorization, so for that operation the factory and the central application act as one quantum.
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{3.5. Scope of Event-driven Integration}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{3.5. Scope of Event-driven Integration}
+
+
+Events are used only between the factories and the central site, over three channels:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Gate Event Feed:} sends factory records to the central site.
+  \item \textbf{Access Change Feed:} sends access rights and configuration to the factories.
+  \item \textbf{Resolution Feed:} returns approved decisions on disputed scans.
+\end{itemize}
+
+Each event is saved at its source first, carries a stable ID and a version, and the receiver confirms that it has applied it (ADR-05). Audit and monitoring data are also sent asynchronously, but on their own channels, not on these three feeds. The QR check, opening, passage, and closing never go through the broker; they stay inside the factory application.
+
+For the logical architecture, this placement gives two needs: a versioned copy of access rights at each factory for gate decisions, and a synchronization component with separate channels for gate records, access changes, and decisions.
+
+\endgroup
