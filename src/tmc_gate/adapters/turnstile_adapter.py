@@ -3,7 +3,7 @@
 Contains:
 - ControllerApiClient: low-level simulator client with configurable scenarios (OPEN_CONFIRMED, RECEIPT_ONLY, TIMEOUT, ERROR).
 - SimulatedTurnstileAdapter: compliant adapter implementing ITurnstileControl (and optional IControllerStatusQuery).
-- FaultyTurnstileAdapter: non-compliant adapter used in contract tests to illustrate LSP (§7.1.3).
+- FaultyTurnstileAdapter: compliant fault-injecting adapter; passes the same contract tests (§7.1.3 LSP).
 """
 
 from tmc_gate.domain.enums import CommandOutcome
@@ -38,7 +38,7 @@ class SimulatedTurnstileAdapter(ITurnstileControl, IControllerStatusQuery):
     def __init__(self, api_client: ControllerApiClient) -> None:
         self._client = api_client
 
-    def openGate(self, commandId: str, laneId: str) -> CommandOutcome:
+    def openGate(self, commandId: str, laneId: str, timeout_ms: int) -> CommandOutcome:
         raise NotImplementedError("TODO [Package 5]: Implement SimulatedTurnstileAdapter.openGate")
 
     def closeGate(self, commandId: str, laneId: str) -> CommandOutcome:
@@ -55,17 +55,18 @@ class SimulatedTurnstileAdapter(ITurnstileControl, IControllerStatusQuery):
 
 
 class FaultyTurnstileAdapter(ITurnstileControl):
-    """Configurable faulty adapter used alongside SimulatedTurnstileAdapter in contract tests to illustrate LSP (§7.1.3).
+    """Compliant fault-injecting adapter (§7.1.3 LSP). It must pass the same contract tests as SimulatedTurnstileAdapter.
 
     TODO [Package 5]:
-    Implement configurable faulty behaviors (e.g., turning `RECEIPT_ONLY` into `OPEN_CONFIRMED` or `TIMEOUT` into `CONTROLLER_ERROR`)
-    so the shared contract test in `tests/test_pkg5_turnstile_contract.py` illustrates LSP.
+    Configurable scenarios: receipt-only (-> UNDETERMINED after timeout_ms), controller confirms non-execution
+    (-> CONTROLLER_ERROR), transport timeout (-> UNDETERMINED). Does not implement IControllerStatusQuery.
+    An LSP-violating example, if wanted, belongs in tests/ as a separate class marked xfail.
     """
 
     def __init__(self, api_client: ControllerApiClient) -> None:
         self._client = api_client
 
-    def openGate(self, commandId: str, laneId: str) -> CommandOutcome:
+    def openGate(self, commandId: str, laneId: str, timeout_ms: int) -> CommandOutcome:
         raise NotImplementedError("TODO [Package 5]: Implement FaultyTurnstileAdapter.openGate")
 
     def closeGate(self, commandId: str, laneId: str) -> CommandOutcome:

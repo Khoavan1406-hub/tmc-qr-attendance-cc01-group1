@@ -281,9 +281,11 @@ class FakeTurnstilePort(IOpenGate, ICloseGate, IEmergencyGate, IControllerStatus
         self.query_outcome: CommandOutcome = CommandOutcome.UNDETERMINED
         self.open_calls: list[tuple[str, str]] = []
         self.close_calls: list[tuple[str, str]] = []
+        self.open_timeouts: list[int] = []
 
-    def openGate(self, commandId: str, laneId: str) -> CommandOutcome:
+    def openGate(self, commandId: str, laneId: str, timeout_ms: int) -> CommandOutcome:
         self.open_calls.append((commandId, laneId))
+        self.open_timeouts.append(timeout_ms)
         return self.open_outcome
 
     def closeGate(self, commandId: str, laneId: str) -> CommandOutcome:
