@@ -1,0 +1,239 @@
+\section*{9. TASK 2 IMPLEMENTATION}
+
+\phantomsection
+\addcontentsline{toc}{section}{9. TASK 2 IMPLEMENTATION}
+
+This chapter describes the code we wrote for Task 2. The prototype implements part of the factory application: M1 Gate Core, which handles QR scans and the gate cycle (Flow A), and M3 Gate Intervention, which handles assisted access and emergency release by guards (Flow B). Everything else in this chapter is either a demo helper or a test double. We keep the target architecture of Chapters 4 and 5 separate from what the prototype actually does, and a rule is only described as checked here when a test in the repository checks it.
+
+\Needspace{9\baselineskip}
+\subsection*{9.1. Scope of the Prototype}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.1. Scope of the Prototype}
+
+We chose Gate Core because it carries the hardest rules in the design: the 2-second answer, the single-use QR claim, the order between opening, passage, and closing, and degraded mode (Sections 4.2.2 and 5.7.2). Gate Intervention was added because it is small and shows the second consumer of the Gate Core interfaces. Table 9.1 lists what is real code, what is only there for the demo, and what is left out.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{110.5pt}|>{\raggedright\arraybackslash}p{80.5pt}|>{\raggedright\arraybackslash}p{219.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{110.5pt}|}{\textbf{Part}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{80.5pt}|}{\textbf{Status}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{219.5pt}|}{\textbf{What the code does}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.1. Scope of the Task 2 Prototype}} \\
+\endlastfoot
+M1 Gate Core & Implemented & Access check against the factory snapshot, the atomic write of ACCEPTED, TokenReservation, and GateCycle before openGate, PASSAGE and LANE\_CLEAR handling, attendance only after a stored passage, degraded mode, and the Gate Core side of assisted and emergency opening. \\
+\hline
+M3 Gate Intervention & Implemented & Guard identity from the session, server-side authority check, write-once support cases, assisted opening, emergency release, and emergency reset. \\
+\hline
+Factory storage (SQLite) & \tofill{Package 4} & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core. \\
+\hline
+M2 Turnstile Adapter & Simulated & SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the turnstile ports against a simulated controller. No real controller is connected. \tofill{Package 5} \\
+\hline
+QR issuer (part of M4) & Demo helper only & Signs 60-second Ed25519 tokens inside the same process so the demo can produce valid codes. In the target design this runs in the central application. \\
+\hline
+Controller simulator & Demo helper only & Swagger endpoints that play the controller: they send PASSAGE and LANE\_CLEAR and choose the simulated command results. \\
+\hline
+Audit, Monitoring, Identity \& RBAC & Stubs & In-memory stubs behind IAuditApi, IHealthApi, IAuthorizationApi, and IGuardIdentityApi. \\*
+\hline\noalign{\nobreak}
+Not implemented & -- & Station Client UI, Site Sync over the WAN, the central application, Attendance Consolidation and Review, HR/Payroll Handover, the standby server, and any real turnstile or broker. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.1}Scope of the Task 2 Prototype}
+
+Because of this scope, the prototype cannot show the physical properties of Chapter 5, such as failover, WAN recovery, or the response time on factory hardware. It shows that the module boundaries and the gate rules can be written and tested as designed.
+
+\Needspace{9\baselineskip}
+\subsection*{9.2. Technology Stack and Repository}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.2. Technology Stack and Repository}
+
+The source code, tests, and the LaTeX source of this report are in one GitHub repository:
+
+\begin{center}
+{\small\url{https://github.com/Khoavan1406-hub/tmc-qr-attendance-cc01-group1}}
+\end{center}
+
+The submitted version is the tag \texttt{m2-submission}. \tofill{create tag and confirm repository access for the lecturer} Table 9.2 lists the stack and why we picked each part.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{90.5pt}|>{\raggedright\arraybackslash}p{120.5pt}|>{\raggedright\arraybackslash}p{199.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{90.5pt}|}{\textbf{Concern}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{120.5pt}|}{\textbf{Choice}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{199.5pt}|}{\textbf{Reason}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.2. Technology Stack of the Prototype}} \\
+\endlastfoot
+Language & Python 3.12 & Every member could read and review it, and abstract base classes are enough to express the ports. \\
+\hline
+Web API and demo & FastAPI with Uvicorn & Swagger UI at \code{/docs} lets us run Flow A and Flow B by hand without writing a client. \\
+\hline
+Factory storage & SQLite (\texttt{sqlite3}) & A single file database is enough for one factory application in a demo, and it supports the transactions that IUnitOfWork needs. It stands in for the factory database of Chapter 5, not for the replicated pair. \\
+\hline
+QR signatures & \texttt{cryptography}, Ed25519 & Matches ADR-11: the issuer holds the private key, and the factory only holds public keys in its snapshot. \\
+\hline
+Tests & pytest, FastAPI TestClient (httpx) & Unit, rule, HTTP, and architecture tests in one runner. \\*
+\hline\noalign{\nobreak}
+CI and packaging & GitHub Actions, Dockerfile & CI runs the full test suite on every push and pull request to \texttt{main} and \texttt{dev}. The Dockerfile starts the API on port 8000. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.2}Technology Stack of the Prototype}
+
+To run the tests and the demo from the repository root:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \texttt{pip install -r requirements.txt}
+  \item \texttt{PYTHONPATH=src pytest}
+  \item \texttt{PYTHONPATH=src uvicorn tmc\_gate.api.app:app}
+  \item open \code{http://localhost:8000/docs} in a browser
+\end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{9.3. Code Structure}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.3. Code Structure}
+
+The package \code{src/tmc_gate} follows the Entry, Business, and Persistence layers of Gate Core in Figure 4.2 (Section 4.1.6), with the ports that Gate Core owns placed in their own folder between the business rules and the adapters. Table 9.3 shows each folder, what it holds, and what it may import. The import rules are not only a convention: \code{tests/test_architecture_solid.py} reads the import statements of every file and fails the build if a layer imports something it should not.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{86.5pt}|>{\raggedright\arraybackslash}p{194.5pt}|>{\raggedright\arraybackslash}p{129.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{86.5pt}|}{\textbf{Folder}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{194.5pt}|}{\textbf{Contents}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{129.5pt}|}{\textbf{May import}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.3. Folders of the Task 2 Code}} \\
+\endlastfoot
+\code{domain/} & Entities and states of Section 4.3 and Tables 4.23a--b: Lane, ScanAttempt, TokenReservation, GateCycle, GateCommand, PassageEvent, AttendanceTransaction, SupportCase, and EligibilitySnapshot with the 60-second and 30-minute limits. & Nothing outside \code{domain/} \\
+\hline
+\code{ports/} & Interfaces owned by Gate Core: IScanSubmission, IInterventionRequest, IFactoryUpdates, the turnstile ports, IUnitOfWork, and the repository and cross-cutting ports. & \code{domain/} \\
+\hline
+\code{application/} & AccessDecision, GateTransactionProcessor, GateCoreFacade, InterventionService, and GateInterventionFacade. & \code{domain/}, \code{ports/} \\
+\hline
+\code{adapters/} & SQLite repositories and unit of work, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers, plus \texttt{sqlite3} and \texttt{cryptography} \\*
+\hline\noalign{\nobreak}
+\code{api/} & FastAPI routers for the kiosk, the controller signals, the guard actions, and the demo helpers. \code{app.py} is the composition root that creates every object and passes the adapters in. & Everything \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.3}Folders of the Task 2 Code}
+
+Figure 4.18 in Section 4.3 is drawn from this code. It shows the classes of \code{domain/}, \code{ports/}, and \code{application/}, and the adapters that implement the ports. The HTTP endpoints map to the interfaces as follows: the kiosk uses \code{POST /api/gate/scans} and \code{GET /api/gate/scans/{id}} (IScanSubmission), the simulated controller uses \code{/api/controller/signals/passage} and \code{/lane-clear} (IPassageEvents), and guards use \code{/api/interventions/*} with an \texttt{X-Guard-Session} header (GateInterventionApi). Demo endpoints under \code{/api/demo/*} are only mounted when \code{demo_mode} is on.
+
+\Needspace{9\baselineskip}
+\subsection*{9.4. SOLID in the Code}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.4. SOLID in the Code}
+
+Section 7.1 states how SOLID shapes the modules. Table 9.4 shows where each principle ended up in the code and which test checks it. A principle with no test is only a structure in the code, so we say so in the last column.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{48.5pt}|>{\raggedright\arraybackslash}p{190.5pt}|>{\raggedright\arraybackslash}p{171.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{48.5pt}|}{\textbf{Principle}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{190.5pt}|}{\textbf{Class and file}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{171.5pt}|}{\textbf{Evidence in the tests}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.4. SOLID Principles Mapped to the Code}} \\
+\endlastfoot
+SRP & AccessDecision (\code{application/access_decision.py}) only checks the token and the snapshot and returns a DecisionResult; it has no turnstile port. EligibilitySnapshot (\code{domain/snapshot.py}) owns the freshness and clock rules. GateTransactionProcessor (\code{application/processor.py}) owns the gate cycle. InterventionService (\code{application/intervention.py}) checks guard authority and leaves gate commands to Gate Core. & \code{test_pkg1_snapshot.py} tests the snapshot rules alone. \code{test_pkg6_*} test guard rules through a fake IInterventionRequest. AccessDecision tests: \tofill{Package 2}. \\
+\hline
+OCP & A new controller is a new class that implements ITurnstileControl in \code{adapters/}; only \code{api/app.py} chooses which adapter is used. & The processor tests run on fake controllers with no change to GateTransactionProcessor. Two real adapter classes on the same contract: \tofill{Package 5}. \\
+\hline
+LSP & \code{ports/turnstile.py} fixes the result set of every command (OPEN\_RESULTS, CLOSE\_RESULTS, RELEASE\_RESULTS, RESET\_RESULTS). A receipt or a timeout has to come back as UNDETERMINED, never as OPEN\_CONFIRMED or CONTROLLER\_ERROR. & Shared contract test run against SimulatedTurnstileAdapter and FaultyTurnstileAdapter: \tofill{Package 5}. \\
+\hline
+ISP & GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, and the controller router only receives IPassageEvents. ITurnstileControl is built from IOpenGate, ICloseGate, and IEmergencyGate; IPassageEvents and IControllerStatusQuery stay separate (\code{ports/turnstile.py}). & \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear. \\*
+\hline\noalign{\nobreak}
+DIP & GateTransactionProcessor receives its ports and IUnitOfWork in the constructor and never creates them. The application layer does not import \texttt{sqlite3}, \texttt{fastapi}, \code{adapters/}, or \code{api/}. & Three import tests in \code{test_architecture_solid.py}. \code{test_processor_requires_unit_of_work} checks that the processor refuses to run without a unit of work. \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.4}SOLID Principles Mapped to the Code}
+
+We wrote the ports first, merged them before the other packages, and then treated them as frozen. This let six people work in parallel against fakes, and it is also the practical test of DIP: Packages 1, 3, and 6 were finished and tested before the SQLite repositories and the turnstile adapter existed.
+
+\Needspace{9\baselineskip}
+\subsection*{9.5. Design Rules Checked by Tests}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.5. Design Rules Checked by Tests}
+
+Table 9.5 links the main gate rules of Chapters 4 to 7 to the tests that check them. Except where the table says otherwise, these tests use in-memory fakes for storage and the controller. They show the logic of Gate Core and Gate Intervention, not the behavior of a real database or controller.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{60.5pt}|>{\raggedright\arraybackslash}p{180.5pt}|>{\raggedright\arraybackslash}p{169.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{60.5pt}|}{\textbf{Source}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{180.5pt}|}{\textbf{Rule}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{169.5pt}|}{\textbf{Test file}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.5. Design Rules and Their Tests}} \\
+\endlastfoot
+Flow A, ADR-02 & ACCEPTED, the token claim, and the new GateCycle are stored before openGate; a busy lane returns LANE\_BUSY without claiming the token. & \code{test_pkg3_processor.py}; with SQLite: \tofill{Package 4} \\
+\hline
+Table 5.5 & openGate gets min(700 ms, time left of the 2-second budget); if no time is left, the scan ends as CANNOT\_PROCESS, the lane is released, and the token stays claimed. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
+\hline
+I-03, Section 7.1.3 & An UNDETERMINED opening is stored, queried once where the port exists, and then moved to PENDING\_RECONCILIATION. The same scan never gets a second open command. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
+\hline
+I-07, ADR-02 & Attendance is created only after a stored PASSAGE while the scan is still OPENED within 15 seconds; a repeated passageEventId is ignored, a second passage is kept without attendance, and a late passage is stored as LATE\_PASSAGE for review. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
+\hline
+I-05, Table 4.23b & closeGate is sent once after LANE\_CLEAR; the 15-second timer never closes the gate; an old close result cannot release a lane that a new scan holds. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_followup.py} \\
+\hline
+I-10, Section 5.7.2 & NORMAL up to 60 s, DEGRADED below 30 min, CANNOT\_PROCESS from 30 min, or when the clock error bound is unknown or at least 2 s, or the data is not continuous. & \code{test_pkg1_snapshot.py} \\
+\hline
+ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use claim of tokenId. & \tofill{Package 2}; concurrent claim: \tofill{Package 4} \\
+\hline
+Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one command per supportCaseId; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py} \\*
+\hline\noalign{\nobreak}
+Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED ends the hold. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py} \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.5}Design Rules and Their Tests}
+
+Flow B is not called end-to-end here, because HR approval and the resolution feed from the central application are not part of the prototype.
+
+\Needspace{9\baselineskip}
+\subsection*{9.6. Test Results}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.6. Test Results}
+
+Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted version, grouped by work package. The last column says what the tests run against, because a test on fakes and a test on SQLite prove different things.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{118.5pt}|>{\raggedright\arraybackslash}p{140.5pt}|>{\centering\arraybackslash}p{40.5pt}|>{\raggedright\arraybackslash}p{87.5pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{118.5pt}|}{\textbf{Test files}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{140.5pt}|}{\textbf{What they cover}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{40.5pt}|}{\textbf{Passed}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{87.5pt}|}{\textbf{Runs against}} \\
+\hline
+\endhead
+\multicolumn{4}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.6. Test Results of the Submitted Version}} \\
+\endlastfoot
+\code{test_architecture_solid.py} & Import direction of each layer, ISP splits & \tofill{n} & Source code \\
+\hline
+\code{test_pkg1_snapshot.py} & Watermark and clock limits, continuity, local rights & \tofill{n} & Domain only \\
+\hline
+\code{test_pkg2_access_decision.py} & Signature, expiry, factory binding & \tofill{n} & \tofill{} \\
+\hline
+\code{test_pkg3_*.py} & Flow A cycle, deadline, UNDETERMINED, passage and close rules, emergency races & \tofill{n} & Fake storage and controller \\
+\hline
+\code{test_pkg4_sqlite_repos.py} & Atomic write, rollback, concurrent token claim, event deduplication & \tofill{n} & SQLite file \\
+\hline
+\code{test_pkg5_turnstile_contract.py} & One contract on both adapters, demo mode & \tofill{n} & Simulated controller \\
+\hline
+\code{test_pkg6_*.py} & Flow B, guard session, support cases, emergency hold and reset & \tofill{n} & Fake storage and controller \\*
+\hline\noalign{\nobreak}
+\code{test_flow_a_e2e.py} & Flow A over HTTP: scan, status, PASSAGE, LANE\_CLEAR & \tofill{n} & \tofill{SQLite and simulated adapter?} \\
+\hline
+\multicolumn{2}{|l|}{\textbf{Total}} & \tofill{n} & \tofill{skipped: n} \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.6}Test Results of the Submitted Version}
+
+\tofill{One paragraph on the Flow A end-to-end run with SQLite and the simulated adapter, and on the Swagger demo, once the code thread reports the real run.}
+
+\Needspace{9\baselineskip}
+\subsection*{9.7. What the Prototype Does Not Show}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.7. What the Prototype Does Not Show}
+
+Passing tests here do not close the open issues of Section 10.2. In particular:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{Controller semantics.} The simulated controller behaves the way I-01, I-03, and I-05 assume, so the tests show that Gate Core handles these signals correctly, not that a real controller sends them.
+  \item \textbf{Response time.} The tests check how the 2-second budget is split, using a test clock. They do not measure the time on factory hardware with a real kiosk and controller.
+  \item \textbf{Replication and failover.} SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested.
+  \item \textbf{Synchronization.} IFactoryUpdates applies snapshot changes and reads the local outbox, but there is no Site Sync or central application, so degraded mode is driven by setting the watermark age by hand.
+  \item \textbf{Security.} The guard session and authorization checks are demo stubs. The QR private key is generated in the same process as the factory code, which the target design does not allow.
+\end{itemize}

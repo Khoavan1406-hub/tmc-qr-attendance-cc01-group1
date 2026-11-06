@@ -27,6 +27,11 @@
 
 \definecolor{tableheader}{RGB}{153,153,153}
 \definecolor{rulegray}{RGB}{153,153,153}
+% Red marker for Phase B values that still wait for real test runs; must be gone before submission.
+% \code{...}: file and class names that may break at / _ . in narrow table cells.
+\DeclareUrlCommand\code{\urlstyle{tt}}
+\makeatletter\g@addto@macro\UrlBreaks{\do\_\do\.}\makeatother
+\newcommand{\tofill}[1]{\textcolor{red}{\textbf{[#1]}}}
 
 % Header and footer configuration
 \setlength{\headheight}{26pt}
@@ -107,7 +112,7 @@
 \vspace{6pt}
 {\color{rulegray}\rule{\textwidth}{0.6pt}}\par
 \vspace{6pt}
-{\fontsize{14}{18}\selectfont\textbf{M2 - Requirements Analysis and Architectural Design}\par}
+{\fontsize{14}{18}\selectfont\textbf{M2 - Architectural Design and Gate Core Implementation}\par}
 \vspace{3pt}
 {\fontsize{14}{18}\selectfont\textbf{QR-based Time and Attendance and Access Control System for TMC}\par}
 \vspace{6pt}
@@ -172,9 +177,19 @@
 \hline
 5 & Chapter 7: Design Principles and Data Security, including the response to Issue 2 (Section 5.8.2, ADR-11). & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & 100\% \\
 \hline
-6 & Chapter 6: Architecture Decisions. Chapters 8--9: Reflection and Conclusion. Report integration and final review. & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
+6 & Chapter 6: Architecture Decisions. Chapter 8: Reflection. Chapter 10: Conclusion. Report integration and final review. & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
 \hline
-7 & Task 2: Gate Core implementation, tests, and GitHub repository. & All members & 100\% \\
+7 & Task 2, Package 1: EligibilitySnapshot freshness, clock, and local-rights rules with boundary tests. & {\fontencoding{T5}\selectfont Châu Anh Nhật} & 100\% \\
+\hline
+8 & Task 2, Package 2: QR credential issuance (demo) and AccessDecision with tests. & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & \tofill{\%} \\
+\hline
+9 & Task 2, Package 3: GateTransactionProcessor, GateCoreFacade, Gate Core API, and Flow A tests. & {\fontencoding{T5}\selectfont Phạm Đăng Khoa} & 100\% \\
+\hline
+10 & Task 2, Package 4: SQLite unit of work, repositories, and outbox with concurrency tests. & {\fontencoding{T5}\selectfont Trần Liên Khang} & \tofill{\%} \\
+\hline
+11 & Task 2, Package 5: turnstile adapters and contract tests. Port contracts, code review, and GitHub repository. & {\fontencoding{T5}\selectfont Văn Công Khoa} & \tofill{\%} \\
+\hline
+12 & Task 2, Package 6: M3 Gate Intervention, Flow B tests, and README. Chapter 9: Task 2 Implementation. & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
 \hline
 \end{tabular}
 \end{center}
@@ -228,6 +243,10 @@
 
 \newpage
 % ==================== CHAPTER 9 ====================
+\input{chapters/task2.tex}
+
+\newpage
+% ==================== CHAPTER 10 ====================
 \input{chapters/chapter8.tex}
 
 \end{document}
