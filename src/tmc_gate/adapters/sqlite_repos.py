@@ -212,6 +212,12 @@ class SqliteScanRepository(IScanRepository):
                 (lane.laneId, lane.stationId, lane.factoryId, lane.direction.value, lane.activeCycleId),
             )
 
+    def get_command(self, commandId: str) -> GateCommand | None:
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_command (keep issued_at)")
+
+    def save_command(self, command: GateCommand) -> None:
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_command (history only)")
+
     def get_scan(self, scanId: str) -> ScanAttempt | None:
         """TODO [Package 4]: Query `scan_attempts` by `scan_id` and return `ScanAttempt` or `None`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_scan")
