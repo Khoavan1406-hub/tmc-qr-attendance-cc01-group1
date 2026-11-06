@@ -2,6 +2,7 @@
 
 The acting guard comes from the X-Guard-Session header, resolved server-side through IGuardIdentityApi.
 A guardId sent in the body is ignored. Missing or unknown sessions get HTTP 401 before any M3 call.
+Without a configured identity provider every intervention call gets HTTP 503.
 """
 
 from fastapi import APIRouter, Header, HTTPException
@@ -43,11 +44,15 @@ def _to_body(supportCaseId: str, result: ScanResult) -> dict[str, object]:
     }
 
 
-def build_intervention_router(facade: GateInterventionFacade, guard_identity: IGuardIdentityApi) -> APIRouter:
+def build_intervention_router(
+    facade: GateInterventionFacade, guard_identity: IGuardIdentityApi | None
+) -> APIRouter:
     """Create FastAPI router for M3 Gate Intervention (Flow B)."""
     router = APIRouter()
 
     def _signed_in_guard(session: str | None) -> str:
+        if guard_identity is None:
+            raise HTTPException(status_code=503, detail="GUARD_IDENTITY_NOT_CONFIGURED")
         guard_id = guard_identity.resolve_guard(session) if session else None
         if guard_id is None:
             raise HTTPException(status_code=401, detail="GUARD_NOT_AUTHENTICATED")

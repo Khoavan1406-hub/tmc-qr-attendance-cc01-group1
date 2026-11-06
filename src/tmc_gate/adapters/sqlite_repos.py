@@ -218,6 +218,10 @@ class SqliteScanRepository(IScanRepository):
     def save_command(self, command: GateCommand) -> None:
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_command (history only)")
 
+    def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
+        """TODO [Package 4]: Query `gate_commands` by `support_case_id` and `command_type`; return `GateCommand` or `None`."""
+        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_command_by_support_case")
+
     def get_scan(self, scanId: str) -> ScanAttempt | None:
         """TODO [Package 4]: Query `scan_attempts` by `scan_id` and return `ScanAttempt` or `None`."""
         raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_scan")

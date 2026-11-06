@@ -33,13 +33,14 @@ Nhằm bám sát yêu cầu đề bài **Assignment M2** và các quyết địn
    * Xác định bảo vệ từ phiên đăng nhập (header `X-Guard-Session`, qua `IGuardIdentityApi`), không lấy `guardId` từ body; thiếu hoặc sai phiên trả HTTP 401.
    * Xác thực thẩm quyền bảo vệ phía server (`IAuthorizationApi` - Scoped RBAC theo nhà máy).
    * Mỗi `supportCaseId` chỉ ghi một lần: gửi lại cùng nội dung được xử lý như lần gửi lại, khác nội dung thì bị từ chối (`SUPPORT_CASE_NOT_RECORDED`) và giữ hồ sơ gốc.
+   * Mỗi `supportCaseId` chỉ phát một lệnh mở hỗ trợ hoặc một lệnh mở khẩn cấp; gửi lại trả về lệnh cũ, kết quả chưa rõ thì hỏi trạng thái controller chứ không gửi lại lệnh.
    * Mở cổng hỗ trợ (Assisted Open) khi công nhân gặp sự cố (quên/hỏng điện thoại): Ghi nhận `SupportCase`, **tuyệt đối không tạo bản ghi chấm công tự động** (tuân thủ nguyên tắc I-04, ADR-07).
    * Mở khẩn cấp (Emergency Release): Đưa làn vào trạng thái `EMERGENCY_HOLD`, khóa mọi lượt quét QR mới tại Kiosk.
    * Reset khẩn cấp: Chỉ cho phép thoát `EMERGENCY_HOLD` khi controller phản hồi xác nhận `RESET_CONFIRMED`.
 
 ### B. Ngoài phạm vi triển khai / Giả lập phục vụ Demo (Out-of-Scope / Simulated)
 * **Xác thực chấm công của HR:** Việc phê duyệt của HR đối với các trường hợp mở hỗ trợ và luồng giải quyết sai lệch (Resolution Feed) tại trung tâm là giả lập (**Flow B không gọi là E2E**).
-* **Đăng nhập của bảo vệ:** Phiên đăng nhập được mô phỏng bằng `DemoGuardSessionStub` với hai token cố định (`demo-session-guard-bd-01`, `demo-session-guard-la-01`). Xác thực thật thuộc hệ thống định danh trung tâm, nằm ngoài phạm vi M2.
+* **Đăng nhập của bảo vệ:** Phiên đăng nhập được mô phỏng bằng `DemoGuardSessionStub` với hai token cố định (`demo-session-guard-bd-01`, `demo-session-guard-la-01`), chỉ bật khi `demo_mode=True`. Khi tắt demo, cần truyền identity provider qua `create_app(guard_identity=...)`; nếu không, các endpoint can thiệp trả HTTP 503. Xác thực thật thuộc hệ thống định danh trung tâm, nằm ngoài phạm vi M2.
 * **Đồng bộ qua mạng WAN:** Module `M9 Site Sync` chỉ tiếp nhận thay đổi snapshot và đọc outbox cục bộ; không triển khai đường truyền mạng vật lý WAN.
 * **Tính lương & Quản lý khách:** Quản lý khách vãng lai (Visitor Management) và tính toán bảng lương (Payroll Calculation) nằm ngoài phạm vi đồ án theo quy định của đề bài M2.
 
@@ -125,7 +126,7 @@ pytest -v
 pytest -v tests/test_architecture_solid.py
 
 # Chạy riêng kiểm thử Flow B Gate Intervention (Package 6)
-pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py
+pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py tests/test_pkg6_pr8_followup.py
 ```
 
 ### Bước 3: Khởi động server FastAPI & Mở Swagger UI

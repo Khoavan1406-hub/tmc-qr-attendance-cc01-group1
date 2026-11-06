@@ -140,9 +140,12 @@ class IScanRepository(ABC):
     def save_command(self, command: GateCommand) -> None:
         """Stage a GateCommand outcome as history only; never changes a GateCycle or the lane reservation."""
 
+    @abstractmethod
     def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
-        """Find a previously issued GateCommand for a supportCaseId (to handle repeated requestAssistedOpen idempotently per §4.2.3)."""
-        return None
+        """Find the GateCommand issued for a supportCaseId and command type (OPEN, EMERGENCY_RELEASE).
+
+        Gate Core uses it so a repeated assisted-open or emergency request never sends a second command (§4.2.3).
+        """
 
 
 class IAttendanceRepository(ABC):

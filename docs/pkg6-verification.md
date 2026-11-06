@@ -14,7 +14,7 @@ source .venv/bin/activate       # Linux/macOS
 .venv\Scripts\Activate.ps1      # Windows PowerShell
 
 # Chạy riêng bộ kiểm thử Package 6
-pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py
+pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py tests/test_pkg6_pr8_followup.py
 
 # Chạy bài kiểm tra kiến trúc SOLID (AST analysis)
 pytest -v tests/test_architecture_solid.py
@@ -33,11 +33,12 @@ Chạy trên nhánh `feat/pkg6-intervention-tests` sau khi gộp `dev` (PR1 + PR
 | :--- | :---: | :---: | :--- |
 | **Package 6 (M3 Intervention)** | 4 | 4 passed | Các nhánh chính của Flow B: phân quyền theo nhà máy, mở hỗ trợ không tạo chấm công, `EMERGENCY_HOLD` và reset. HR duyệt và Resolution Feed là giả lập |
 | **Package 6 – hồi quy review PR #8** | 15 | 15 passed | Phiên đăng nhập bảo vệ qua HTTP, hồ sơ không lưu được, `supportCaseId` dùng lại |
+| **Package 6 – review PR #8 vòng 2** | 8 | 8 passed | Transaction được đóng ở nhánh chỉ đọc, phiên demo chỉ nhận khi `demo_mode`, mỗi `supportCaseId` chỉ một lệnh `emergencyRelease` |
 | **Architectural Fitness (SOLID)** | 4 | 4 passed | Kiểm tra phụ thuộc giữa các tầng bằng AST |
 | **Flow A qua HTTP (fake ports)** | 1 | 1 passed | Chưa phải E2E với SQLite và adapter mô phỏng |
 | **Package 1 (Snapshot Rules)** | 146 | 146 passed | Biên thời gian mili-giây và phân loại chế độ hoạt động |
 | **Package 3 (Gate Processor)** | 37 | 37 passed | `test_pkg3_processor`, `test_pkg3_rules`, hai file hồi quy PR2 |
-| **Toàn bộ Repository** | 213 | **207 passed, 6 skipped** | 6 test skip thuộc TODO của Package 2, 4, 5 |
+| **Toàn bộ Repository** | 221 | **215 passed, 6 skipped** | 6 test skip thuộc TODO của Package 2, 4, 5 |
 
 ---
 
@@ -82,3 +83,8 @@ Chạy trên nhánh `feat/pkg6-intervention-tests` sau khi gộp `dev` (PR1 + PR
 * Khi Gate Core không lưu được `SupportCase` (`recordIntervention` trả `False`), M3 trả `SUPPORT_CASE_NOT_RECORDED` và không gửi lệnh mở hay mở khẩn cấp.
 * Dùng lại `supportCaseId` với nội dung khác (đổi nhân viên, hoặc đổi từ mở hỗ trợ sang khẩn cấp) bị từ chối và hồ sơ gốc giữ nguyên; gửi lại đúng nội dung thì trả về lệnh cũ, không mở cổng lần hai.
 * M3 dùng timeout mở hỗ trợ 3.000 ms và gọi `requestEmergencyReset`; reset chưa xác nhận vẫn giữ `EMERGENCY_HOLD`.
+
+### Ca bổ sung: `test_pkg6_pr8_followup.py` (review PR #8 vòng 2)
+* Gửi lại hồ sơ (cùng hoặc khác nội dung) đóng transaction trước khi trả kết quả; kiểm tra bằng `BEGIN IMMEDIATE` của SQLite. Fake UoW trong `test_pkg3_processor.py` cũng báo lỗi nếu một transaction còn mở khi bắt đầu transaction mới.
+* Token demo cố định chỉ được nhận khi `demo_mode=True`; ngoài demo, app dùng identity provider được truyền vào, nếu không có thì trả HTTP 503.
+* Gửi lại cùng hồ sơ khẩn cấp trả về `commandId` cũ và không gọi controller lần hai; nếu lần đầu `UNDETERMINED` thì hỏi trạng thái một lần thay vì gửi lại lệnh.

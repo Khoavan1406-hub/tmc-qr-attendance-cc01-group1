@@ -713,13 +713,11 @@ class GateTransactionProcessor(IPassageEvents):
         A supportCaseId is written once. Resending the same case is accepted without a new write; a different
         case under an existing supportCaseId returns False and keeps the original evidence.
         """
-        conflict = False
         with self._uow:
             existing = self._scan_repo.get_support_case(case.supportCaseId)
             if existing is not None:
-                if _same_support_case(existing, case):
-                    return True
-                conflict = True
+                # Read-only path: close the transaction before returning (no write for a resend or a conflict).
+                self._uow.rollback()
             else:
                 self._scan_repo.save_support_case(
                     case,
@@ -741,7 +739,9 @@ class GateTransactionProcessor(IPassageEvents):
                     },
                 )
                 self._uow.commit()
-        if conflict:
+        if existing is not None and _same_support_case(existing, case):
+            return True
+        if existing is not None:
             self._audit_api.append_async({
                 "action": "SUPPORT_CASE_ID_CONFLICT",
                 "supportCaseId": case.supportCaseId,
@@ -853,51 +853,89 @@ class GateTransactionProcessor(IPassageEvents):
         return ScanResult(scanId=supportCaseId, state=state, laneId=laneId, commandId=cmd_id, reason=outcome.value)
 
     def requestEmergencyRelease(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
-        """Place the lane in EMERGENCY_HOLD and invoke emergencyRelease (Flow B, Table 4.22)."""
-        current_time = now or datetime.now(UTC)
-        active = self._scan_repo.get_active_cycle_for_lane(laneId)
+        """Place the lane in EMERGENCY_HOLD and invoke emergencyRelease (Flow B, Table 4.22).
 
+        One emergencyRelease command per supportCaseId: a repeated request returns the stored command and,
+        if its outcome is still unknown, asks the controller once instead of sending the command again.
+        """
+        current_time = now or datetime.now(UTC)
         cmd_id = f"cmd-emg-{uuid.uuid4().hex[:10]}"
-        if active is not None:
-            # Keep scanId, passageStatus and closeCommandId of the running cycle; only switch it to EMERGENCY_HOLD
-            cycle = active
-            cycle.closureStatus = ClosureStatus.EMERGENCY_HOLD
-            cycle.supportCaseId = cycle.supportCaseId or supportCaseId
-        else:
-            cycle = GateCycle(
-                cycleId=f"cyc-emg-{uuid.uuid4().hex[:10]}",
-                laneId=laneId,
-                supportCaseId=supportCaseId,
-                passageStatus=PassageStatus.NO_PASSAGE,
-                closureStatus=ClosureStatus.EMERGENCY_HOLD,
-                observationDeadline=current_time,
-            )
-        cycle_id = cycle.cycleId
-        command = GateCommand(
-            commandId=cmd_id,
-            cycleId=cycle_id,
-            laneId=laneId,
-            supportCaseId=supportCaseId,
-            commandType=CommandType.EMERGENCY_RELEASE,
-            outcome=CommandOutcome.SENT,
-            issuedAt=current_time,
-        )
         with self._uow:
-            if active is not None and active.scanId and active.passageStatus == PassageStatus.WAITING:
-                scan = self._scan_repo.get_scan(active.scanId)
-                if scan and scan.state == ScanState.OPENED:
-                    scan.state = ScanState.PENDING_RECONCILIATION
-                    scan.reason = "EMERGENCY_RELEASE_DURING_OPEN_CYCLE"
-                    self._scan_repo.save_scan(scan)
-            self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
-            self._uow.commit()
+            existing = self._scan_repo.get_command_by_support_case(supportCaseId, CommandType.EMERGENCY_RELEASE.value)
+            if existing is not None:
+                self._uow.rollback()
+            else:
+                active = self._scan_repo.get_active_cycle_for_lane(laneId)
+                if active is not None:
+                    # Keep scanId, passageStatus and closeCommandId of the running cycle; only switch it to EMERGENCY_HOLD
+                    cycle = active
+                    cycle.closureStatus = ClosureStatus.EMERGENCY_HOLD
+                    cycle.supportCaseId = cycle.supportCaseId or supportCaseId
+                    if active.scanId and active.passageStatus == PassageStatus.WAITING:
+                        scan = self._scan_repo.get_scan(active.scanId)
+                        if scan and scan.state == ScanState.OPENED:
+                            scan.state = ScanState.PENDING_RECONCILIATION
+                            scan.reason = "EMERGENCY_RELEASE_DURING_OPEN_CYCLE"
+                            self._scan_repo.save_scan(scan)
+                else:
+                    cycle = GateCycle(
+                        cycleId=f"cyc-emg-{uuid.uuid4().hex[:10]}",
+                        laneId=laneId,
+                        supportCaseId=supportCaseId,
+                        passageStatus=PassageStatus.NO_PASSAGE,
+                        closureStatus=ClosureStatus.EMERGENCY_HOLD,
+                        observationDeadline=current_time,
+                    )
+                command = GateCommand(
+                    commandId=cmd_id,
+                    cycleId=cycle.cycleId,
+                    laneId=laneId,
+                    supportCaseId=supportCaseId,
+                    commandType=CommandType.EMERGENCY_RELEASE,
+                    outcome=CommandOutcome.SENT,
+                    issuedAt=current_time,
+                )
+                self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
+                self._uow.commit()
+
+        if existing is not None:
+            outcome = existing.outcome
+            if outcome not in (CommandOutcome.EMERGENCY_RELEASED, CommandOutcome.CONTROLLER_ERROR):
+                outcome = self._store_emergency_outcome(
+                    existing.commandId, self._query_or_undetermined(existing.commandId, existing.laneId)
+                )
+            return self._emergency_release_result(supportCaseId, existing.laneId, existing.commandId, outcome)
 
         outcome = self._emergency_gate_port.emergencyRelease(commandId=cmd_id, laneId=laneId)
+        outcome = self._store_emergency_outcome(cmd_id, outcome)
+        return self._emergency_release_result(supportCaseId, laneId, cmd_id, outcome)
+
+    def _store_emergency_outcome(self, commandId: str, outcome: CommandOutcome) -> CommandOutcome:
+        """Save the emergencyRelease outcome on its GateCommand; a confirmed result is never downgraded."""
+        with self._uow:
+            command = self._scan_repo.get_command(commandId)
+            if command is not None:
+                if command.outcome in (CommandOutcome.EMERGENCY_RELEASED, CommandOutcome.CONTROLLER_ERROR):
+                    outcome = command.outcome
+                else:
+                    command.outcome = outcome
+                    self._scan_repo.save_command(command)
+            self._uow.commit()
+        if outcome != CommandOutcome.EMERGENCY_RELEASED:
+            self._health_api.report_event_async(
+                {"alert": "EMERGENCY_RELEASE_NOT_CONFIRMED", "commandId": commandId, "outcome": outcome.value}
+            )
+        return outcome
+
+    @staticmethod
+    def _emergency_release_result(
+        supportCaseId: str, laneId: str, commandId: str, outcome: CommandOutcome
+    ) -> ScanResult:
         return ScanResult(
             scanId=supportCaseId,
             state=ScanState.OPENED if outcome == CommandOutcome.EMERGENCY_RELEASED else ScanState.UNDETERMINED,
             laneId=laneId,
-            commandId=cmd_id,
+            commandId=commandId,
             reason=ClosureStatus.EMERGENCY_HOLD.value,
         )
 
