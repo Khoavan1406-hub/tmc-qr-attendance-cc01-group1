@@ -108,21 +108,25 @@ class ControllerApiClient:
     def query_command(self, command_id: str, lane_id: str) -> str:
         """Ask the controller for the status of an earlier command and return the raw reply."""
         with self._lock:
-            sent = [e for e in self.command_log if e["kind"] == "COMMAND" and e["commandId"] == command_id]
+            sent = [
+                e
+                for e in self.command_log
+                if e["kind"] == "COMMAND" and e["commandId"] == command_id and e["laneId"] == lane_id
+            ]
             self.command_log.append({"kind": "QUERY", "action": "QUERY", "commandId": command_id, "laneId": lane_id})
             status = self.simulated_query_status
         if status == RAW_NETWORK_ERROR:
             raise ConnectionError("simulated transport failure")
         if not sent:
-            return RAW_UNDETERMINED  # the controller never saw this command id
+            return RAW_UNDETERMINED  # the controller never saw this (commandId, laneId) pair
         if status == "CONFIRMED":
             return _CONFIRMED_RAW[sent[-1]["action"]]
         return status
 
-    def action_of(self, command_id: str) -> str | None:
+    def action_of(self, command_id: str, lane_id: str) -> str | None:
         with self._lock:
             for entry in reversed(self.command_log):
-                if entry["kind"] == "COMMAND" and entry["commandId"] == command_id:
+                if entry["kind"] == "COMMAND" and entry["commandId"] == command_id and entry["laneId"] == lane_id:
                     return entry["action"]
         return None
 
@@ -175,7 +179,7 @@ class SimulatedTurnstileAdapter(_ContractAdapterBase, IControllerStatusQuery):
     """
 
     def queryStatus(self, commandId: str, laneId: str) -> CommandOutcome:
-        action = self._client.action_of(commandId)
+        action = self._client.action_of(commandId, laneId)  # a query must match both commandId and laneId
         try:
             raw = self._client.query_command(commandId, laneId)
         except (ConnectionError, TimeoutError, OSError):
@@ -221,10 +225,9 @@ class FaultyTurnstileAdapter(_ContractAdapterBase):
     def _raw_reply(self, action: str, commandId: str, laneId: str) -> str:
         if not self._fault_applies(action):
             return super()._raw_reply(action, commandId, laneId)
-        try:
-            super()._raw_reply(action, commandId, laneId)  # the command still reaches the controller log
-        except ConnectionError:
-            pass
+        # The command still reaches the controller. A real transport failure is not swallowed: it propagates
+        # to _execute and becomes UNDETERMINED, so an injected fault can never turn it into CONTROLLER_ERROR.
+        super()._raw_reply(action, commandId, laneId)
         if self.fault == FAULT_TRANSPORT_TIMEOUT:
             raise TimeoutError("injected transport timeout")
         if self.fault == FAULT_CONTROLLER_REJECTS:
