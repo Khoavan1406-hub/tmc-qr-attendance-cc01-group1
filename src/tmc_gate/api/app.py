@@ -171,7 +171,6 @@ def create_app(
             build_demo_router(
                 qr_issuer=qr_issuer,
                 snapshot_repo=snapshot_repo,
-                factory_updates=gate_core_facade,
                 attendance_repo=attendance_repo,
                 controller_client=controller_client,
             )
