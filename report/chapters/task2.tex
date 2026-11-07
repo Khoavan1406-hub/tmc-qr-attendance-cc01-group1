@@ -26,7 +26,7 @@ M3 Gate Intervention & Implemented & Guard identity from the session, server-sid
 \hline
 Factory storage (SQLite) & \tofill{Package 4} & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core. \\
 \hline
-M2 Turnstile Adapter & Simulated & SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the turnstile ports against a simulated controller. No real controller is connected. \tofill{Package 5} \\
+M2 Turnstile Adapter & Simulated & SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the turnstile ports against a simulated controller. Both pass the same contract tests, and SimulatedTurnstileAdapter also answers status queries. No real controller is connected. \\
 \hline
 QR issuer (part of M4) & Demo helper only & Signs 60-second Ed25519 tokens inside the same process so the demo can produce valid codes. In the target design this runs in the central application. \\
 \hline
@@ -133,9 +133,9 @@ Section 7.1 states how SOLID shapes the modules. Table 9.4 shows where each prin
 \endlastfoot
 SRP & AccessDecision (\code{application/access_decision.py}) only checks the token and the snapshot and returns a DecisionResult; it has no turnstile port. EligibilitySnapshot (\code{domain/snapshot.py}) owns the freshness and clock rules. GateTransactionProcessor (\code{application/processor.py}) owns the gate cycle. InterventionService (\code{application/intervention.py}) checks guard authority and leaves gate commands to Gate Core. & \code{test_pkg1_snapshot.py} tests the snapshot rules alone. \code{test_pkg6_*} test guard rules through a fake IInterventionRequest. AccessDecision tests: \tofill{Package 2}. \\
 \hline
-OCP & A new controller is a new class that implements ITurnstileControl in \code{adapters/}; only \code{api/app.py} chooses which adapter is used. & The processor tests run on fake controllers with no change to GateTransactionProcessor. Two real adapter classes on the same contract: \tofill{Package 5}. \\
+OCP & A new controller is a new class that implements ITurnstileControl in \code{adapters/}; only \code{api/app.py} chooses which adapter is used. & The processor tests run on fake controllers, and \code{test_pkg5_adapter_with_processor.py} runs the same GateTransactionProcessor with both adapter classes, with no change to the processor. \\
 \hline
-LSP & \code{ports/turnstile.py} fixes the result set of every command (OPEN\_RESULTS, CLOSE\_RESULTS, RELEASE\_RESULTS, RESET\_RESULTS). A receipt or a timeout has to come back as UNDETERMINED, never as OPEN\_CONFIRMED or CONTROLLER\_ERROR. & Shared contract test run against SimulatedTurnstileAdapter and FaultyTurnstileAdapter: \tofill{Package 5}. \\
+LSP & \code{ports/turnstile.py} fixes the result set of every command (OPEN\_RESULTS, CLOSE\_RESULTS, RELEASE\_RESULTS, RESET\_RESULTS). A receipt or a timeout has to come back as UNDETERMINED, never as OPEN\_CONFIRMED or CONTROLLER\_ERROR. & \code{test_pkg5_turnstile_contract.py} runs one contract against SimulatedTurnstileAdapter and FaultyTurnstileAdapter, and both pass. A third adapter that reports a receipt as OPEN\_CONFIRMED fails the same contract (\code{test_lsp_violating_adapter_fails_the_same_contract}, an expected failure). \\
 \hline
 ISP & GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, and the controller router only receives IPassageEvents. ITurnstileControl is built from IOpenGate, ICloseGate, and IEmergencyGate; IPassageEvents and IControllerStatusQuery stay separate (\code{ports/turnstile.py}). & \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear. \\*
 \hline\noalign{\nobreak}
@@ -165,7 +165,7 @@ Flow A, ADR-02 & ACCEPTED, the token claim, and the new GateCycle are stored bef
 \hline
 Table 5.5 & openGate gets min(700 ms, time left of the 2-second budget); if no time is left, the scan ends as CANNOT\_PROCESS, the lane is released, and the token stays claimed. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
 \hline
-I-03, Section 7.1.3 & An UNDETERMINED opening is stored, queried once where the port exists, and then moved to PENDING\_RECONCILIATION. The same scan never gets a second open command. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
+I-03, Section 7.1.3 & An UNDETERMINED opening is stored, queried once where the port exists, and then moved to PENDING\_RECONCILIATION. The same scan never gets a second open command. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py}, \code{test_pkg5_adapter_with_processor.py} \\
 \hline
 I-07, ADR-02 & Attendance is created only after a stored PASSAGE while the scan is still OPENED within 15 seconds; a repeated passageEventId is ignored, a second passage is kept without attendance, and a late passage is stored as LATE\_PASSAGE for review. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
 \hline
@@ -199,19 +199,19 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \endhead
 \multicolumn{4}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.6. Test Results of the Submitted Version}} \\
 \endlastfoot
-\code{test_architecture_solid.py} & Import direction of each layer, ISP splits & \tofill{n} & Source code \\
+\code{test_architecture_solid.py} & Import direction of each layer, ISP splits & 4 & Source code \\
 \hline
-\code{test_pkg1_snapshot.py} & Watermark and clock limits, continuity, local rights & \tofill{n} & Domain only \\
+\code{test_pkg1_snapshot.py} & Watermark and clock limits, continuity, local rights & 146 & Domain only \\
 \hline
 \code{test_pkg2_access_decision.py} & Signature, expiry, factory binding & \tofill{n} & \tofill{} \\
 \hline
-\code{test_pkg3_*.py} & Flow A cycle, deadline, UNDETERMINED, passage and close rules, emergency races & \tofill{n} & Fake storage and controller \\
+\code{test_pkg3_*.py} & Flow A cycle, deadline, UNDETERMINED, passage and close rules, emergency races & 37 & Fake storage and controller \\
 \hline
 \code{test_pkg4_sqlite_repos.py} & Atomic write, rollback, concurrent token claim, event deduplication & \tofill{n} & SQLite file \\
 \hline
-\code{test_pkg5_turnstile_contract.py} & One contract on both adapters, demo mode & \tofill{n} & Simulated controller \\
+\code{test_pkg5_*.py} & One contract on both adapters, processor with real adapters, demo endpoints, review regressions & 135 (+1 expected failure) & Simulated controller; fake storage \\
 \hline
-\code{test_pkg6_*.py} & Flow B, guard session, support cases, emergency hold and reset & \tofill{n} & Fake storage and controller \\*
+\code{test_pkg6_*.py} & Flow B, guard session, support cases, emergency hold and reset & 27 & Fake storage and controller \\*
 \hline\noalign{\nobreak}
 \code{test_flow_a_e2e.py} & Flow A over HTTP: scan, status, PASSAGE, LANE\_CLEAR & \tofill{n} & \tofill{SQLite and simulated adapter?} \\
 \hline
