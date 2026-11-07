@@ -66,10 +66,10 @@ src/tmc_gate/
    - Khi gặp `UNDETERMINED`, giữ nguyên khóa làn để kiểm tra/đối soát, **tuyệt đối không tự động gọi lại `open_gate()`**.
 
 6. **Luật Chế Độ Suy Giảm Có Giới Hạn (`I-10` & `ADR-06` – §5.7.2):**
-   - Dựa trên tuổi của `confirmed_watermark` trong `EligibilitySnapshot` (và sai số đồng hồ `<= 2 giây`):
+   - Dựa trên tuổi của `confirmed_watermark` trong `EligibilitySnapshot` (và sai số đồng hồ `< 2 giây`):
      - `<= 60 giây`: Chế độ `NORMAL`.
-     - `> 60 giây` và `<= 30 phút (1800 giây)`: Chế độ `DEGRADED` (vẫn cho phép quét QR hợp lệ nhưng gắn `degraded_flag = True` vào `ScanAttempt` và `AttendanceTransaction`).
-     - `> 30 phút` hoặc sai số đồng hồ `> 2 giây` hoặc dữ liệu thiếu tính liên tục: Trả về `CANNOT_PROCESS`.
+     - `> 60 giây` và `< 30 phút (1800 giây)`: Chế độ `DEGRADED` (vẫn cho phép quét QR hợp lệ nhưng gắn `degraded_flag = True` vào `ScanAttempt` và `AttendanceTransaction`).
+     - `>= 30 phút (1800 giây)` hoặc sai số đồng hồ `>= 2 giây` (hoặc không xác định) hoặc dữ liệu thiếu tính liên tục: Trả về `CANNOT_PROCESS`.
 
 7. **Luật Tách Biệt Trạng Thái Bước Qua và Đóng Cổng (§4.2.5 – Table 4.23b):**
    - Trong `GateCycle`, `passage_status` (`WAITING`, `PASSED`, `NO_PASSAGE`) và `closure_status` (`OPENED`, `CLEAR_TO_CLOSE`, `CLOSE_SENT`, `CLOSED`, `CLOSE_FAILED`, `CLOSE_UNCERTAIN`, `EMERGENCY_HOLD`) chạy độc lập.
