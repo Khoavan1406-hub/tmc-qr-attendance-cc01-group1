@@ -1,14 +1,14 @@
-\section*{9. CONCLUSION}
+\section*{10. CONCLUSION}
 
 \phantomsection
-\addcontentsline{toc}{section}{9. CONCLUSION}
+\addcontentsline{toc}{section}{10. CONCLUSION}
 
-This report presents our architecture for TMC's QR-based attendance and access control system at its two factories. It covers the context and requirements, the architecture characteristics, the choice of style, the logical and physical architecture, the main decisions, and the design principles.
+This report presents our architecture for TMC's QR-based attendance and access control system at its two factories. It covers the context and requirements, the architecture characteristics, the choice of style, the logical and physical architecture, the main decisions, the design principles, and a prototype of Gate Core and Gate Intervention for Task 2.
 
-\subsection*{9.1. Summary of the Architecture}
+\subsection*{10.1. Summary of the Architecture}
 
 \phantomsection
-\addcontentsline{toc}{subsection}{9.1. Summary of the Architecture}
+\addcontentsline{toc}{subsection}{10.1. Summary of the Architecture}
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{Characteristics.} The six drivers are reliability and data integrity, availability, performance, security and privacy, auditability, and interoperability. A scan has to be answered within 2 seconds, and accepted records must survive a factory's WAN outage.
@@ -21,13 +21,13 @@ This report presents our architecture for TMC's QR-based attendance and access c
 The design gives up the simplicity of a single deployment and accepts that central data lags behind the gates. In return, scans stay on the factory LAN, each factory keeps working when its link fails, and every gate record is stored before it leaves the factory.
 
 \Needspace{9\baselineskip}
-\subsection*{9.2. Limitations and Open Issues}
+\subsection*{10.2. Limitations and Open Issues}
 
 \phantomsection
-\addcontentsline{toc}{subsection}{9.2. Limitations and Open Issues}
+\addcontentsline{toc}{subsection}{10.2. Limitations and Open Issues}
 
 
-The design still needs API verification and implementation tests. The main open points are:
+The prototype in Chapter 9 checks the Gate Core rules against simulated storage and controller ports, but the design still has to be verified against the real APIs and infrastructure. The main open points are:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{External contracts.} Command receipt, opening confirmation, passage and lane-clear events, close confirmation, status lookup, and duplicate protection must be verified with the real controller (I-01, I-05), and HR/Payroll receipt semantics must be checked (I-02), including whether an acknowledgement means that the data is ready for reconciliation (IC-01).
@@ -39,4 +39,3 @@ The design still needs API verification and implementation tests. The main open 
   \item \textbf{Infrastructure.} Synchronous replication makes the standby part of every write. When the synchronous commit cannot be met, new scans that would open a gate stop (Section 5.6.2), and TMC must accept this operational impact. Controller links without TLS need network isolation and restricted access.
   \item \textbf{Data retention.} TMC must confirm retention periods for attendance, support records, audit logs, and backups.
 \end{itemize}
-
