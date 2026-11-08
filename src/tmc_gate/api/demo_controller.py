@@ -17,7 +17,7 @@ from pydantic import BaseModel, Field
 
 from tmc_gate.adapters.demo_qr_issuer import QrCredentialIssuance
 from tmc_gate.adapters.turnstile_adapter import ControllerApiClient
-from tmc_gate.ports.repositories import IAttendanceRepository, ISnapshotRepository
+from tmc_gate.ports.repositories import IAttendanceRepository, ISnapshotRepository, IUnitOfWork
 
 DEMO_TAG = "Demo Helpers (M4 QR Issuer & Fault Simulation)"
 
@@ -74,8 +74,9 @@ def build_demo_router(
     snapshot_repo: ISnapshotRepository,
     attendance_repo: IAttendanceRepository,
     controller_client: ControllerApiClient,
+    uow: IUnitOfWork | None = None,
 ) -> APIRouter:
-    """Create Swagger UI demo helper endpoints."""
+    """Create Swagger UI demo helper endpoints (`uow` is required when the snapshot is stored in SQLite)."""
     router = APIRouter()
 
     @router.post("/api/demo/qr-tokens", tags=[DEMO_TAG])
@@ -101,7 +102,12 @@ def build_demo_router(
             confirmedWatermark=now - timedelta(seconds=req.watermarkAgeSeconds),
             clockErrorBoundSec=req.clockErrorBoundSec,
         )
-        snapshot_repo.save_snapshot(aged)
+        if uow is None:
+            snapshot_repo.save_snapshot(aged)
+        else:
+            with uow:
+                snapshot_repo.save_snapshot(aged)
+                uow.commit()
         return {
             "watermarkAgeSeconds": req.watermarkAgeSeconds,
             "clockErrorBoundSec": req.clockErrorBoundSec,

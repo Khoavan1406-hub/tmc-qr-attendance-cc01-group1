@@ -1,5 +1,9 @@
 """FastAPI application composition root (Dependency Injection wiring for M1 Gate Core, M3 Gate Intervention, and Demo helpers)."""
 
+import os
+
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from datetime import UTC, datetime
 
 from fastapi import FastAPI
@@ -11,6 +15,7 @@ from tmc_gate.adapters.cross_cutting_stubs import (
 )
 from tmc_gate.adapters.demo_guard_sessions import DemoGuardSessionStub
 from tmc_gate.adapters.demo_qr_issuer import QrCredentialIssuance
+from tmc_gate.adapters.passage_timeout_worker import PassageTimeoutWorker
 from tmc_gate.adapters.sqlite_repos import (
     SqliteAttendanceRepository,
     SqliteOutboxRepository,
@@ -39,12 +44,17 @@ def create_app(
     factory_id: str = "BD",
     demo_mode: bool = True,
     guard_identity: IGuardIdentityApi | None = None,
+    passage_timeout_interval_sec: float | None = 0.25,
 ) -> FastAPI:
     """Wire ports and adapters using Constructor Dependency Injection (DIP) and return the FastAPI app.
 
     Simulator / QR issuance endpoints in demo_controller are mounted ONLY when demo_mode=True.
     Guard sessions: an injected identity provider is used when given; otherwise the fixed demo sessions are
     accepted only when demo_mode=True, and outside demo mode intervention calls are refused (HTTP 503).
+    The passage-timeout worker runs while the app is served (lifespan) and sweeps all lanes every
+    `passage_timeout_interval_sec`; None disables the thread (tests then call `app.state.passage_timeout_worker`).
+    The eligibility snapshot is stored in SQLite: on restart the last applied snapshot is loaded, and the demo
+    snapshot below is used only when the database has none yet.
     """
     conn = create_sqlite_connection(db_path)
     init_sqlite_schema(conn)
@@ -92,12 +102,20 @@ def create_app(
     # All repositories share the UnitOfWork lock: the connection is shared, so a request on another thread must not
     # read rows staged by a transaction that has not committed yet (it waits until commit or rollback).
     scan_repo = SqliteScanRepository(conn, lock=uow.lock)
-    scan_repo.seed_lane(Lane(laneId="LANE-BD-01", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.ENTRY))
-    scan_repo.seed_lane(Lane(laneId="LANE-BD-02", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.EXIT))
+    lanes = [
+        Lane(laneId="LANE-BD-01", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.ENTRY),
+        Lane(laneId="LANE-BD-02", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.EXIT),
+    ]
+    for lane in lanes:
+        scan_repo.seed_lane(lane)
 
     attendance_repo = SqliteAttendanceRepository(conn, lock=uow.lock)
     outbox_repo = SqliteOutboxRepository(conn, lock=uow.lock)
-    snapshot_repo = SqliteSnapshotRepository(initial_snapshot)
+    snapshot_repo = SqliteSnapshotRepository(initial_snapshot, conn=conn, lock=uow.lock, uow=uow)
+    if demo_mode:
+        # Demo only: the issuer key is regenerated on each start. A restored snapshot keeps its own keys and
+        # rights; the current demo issuer key is added as if central had published it through Site Sync.
+        snapshot_repo.trust_additional_key(qr_issuer.public_key_pem)
 
     audit_stub = InMemoryAuditStub()
     health_stub = InMemoryHealthStub()
@@ -122,6 +140,7 @@ def create_app(
         uow=uow,
         status_query_port=turnstile_adapter,
         snapshot_repo=snapshot_repo,
+        passage_window_query=scan_repo,
     )
     gate_core_facade = GateCoreFacade(
         processor=processor,
@@ -140,7 +159,24 @@ def create_app(
     )
     intervention_facade = GateInterventionFacade(service=intervention_service)
 
+    passage_timeout_worker = PassageTimeoutWorker(
+        sweep=processor.sweepPassageTimeouts,
+        lane_ids=[lane.laneId for lane in lanes],
+        interval_sec=passage_timeout_interval_sec or 0.25,
+        health_api=health_stub,
+    )
+
+    @asynccontextmanager
+    async def lifespan(_: FastAPI) -> AsyncIterator[None]:
+        if passage_timeout_interval_sec is not None:
+            passage_timeout_worker.start()
+        try:
+            yield
+        finally:
+            passage_timeout_worker.stop()
+
     fastapi_app = FastAPI(
+        lifespan=lifespan,
         title="TMC QR Attendance & Access Control – Factory Gate Application (M1 & M3)",
         description=(
             "Milestone 2 Task 2 Implementation adhering to SOLID principles and Ports & Adapters architecture. "
@@ -160,6 +196,8 @@ def create_app(
     fastapi_app.state.processor = processor
     fastapi_app.state.gate_core_facade = gate_core_facade
     fastapi_app.state.demo_mode = demo_mode
+    fastapi_app.state.passage_timeout_worker = passage_timeout_worker
+    fastapi_app.state.health = health_stub
 
     # Register Entry Layer Routers
     fastapi_app.include_router(build_gate_core_router(scan_submission=gate_core_facade, signal_handler=processor))
@@ -175,10 +213,12 @@ def create_app(
                 snapshot_repo=snapshot_repo,
                 attendance_repo=attendance_repo,
                 controller_client=controller_client,
+                uow=uow,
             )
         )
 
     return fastapi_app
 
 
-app = create_app()
+# `uvicorn tmc_gate.api.app:app`: set TMC_GATE_DB to a file path to keep data across restarts (default: in memory)
+app = create_app(db_path=os.environ.get("TMC_GATE_DB", ":memory:"))

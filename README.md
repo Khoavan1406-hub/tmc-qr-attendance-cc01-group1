@@ -3,8 +3,9 @@
 Repository hiện thực hóa **Task 2 (Code Implementation)** của môn **Kiến trúc Phần mềm (HK261 – HCMUT)** cho hệ thống chấm công và kiểm soát ra vào bằng mã QR tại công ty sản xuất **TMC** (hai nhà máy Bình Dương và Long An).
 
 - **Report kiến trúc:** [Source LaTeX và hướng dẫn build](report/README.md) nằm trong `report/`, cùng repo với `src/` và `tests/` để đối chiếu thiết kế với code.
-- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật. Lưu trữ SQLite (Package 4) đang được hoàn thiện; các test hiện tại của M1/M3 chạy trên fake repository và fake controller.
-- **Trạng thái hiện tại:** Package 5 (adapter cửa xoay giả lập + endpoint demo) đã có code và test. Package 2 và 4 còn TODO, nên kịch bản demo Swagger ở mục 6 chỉ chạy trọn được sau khi hai package này được merge (trước đó `POST /api/demo/qr-tokens` trả HTTP 501).
+- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật trên SQLite (`SqliteUnitOfWork` + repositories). Test đơn vị dùng fake repository; test tích hợp `tests/test_e2e_sqlite_flows.py` và `tests/test_submission_audit_regressions.py` chạy qua `create_app()` với file SQLite thật.
+- **Trạng thái hiện tại:** Package 1–6 đã merge vào `dev`. Snapshot quyền truy cập được lưu trong SQLite cùng dấu chống trùng update, nên khởi động lại vẫn giữ quyền đã áp dụng. Một worker nền tự chuyển cycle quá 15 giây không có PASSAGE sang `NO_PASSAGE` / `PENDING_RECONCILIATION` (không gửi `closeGate`).
+- **Giới hạn của prototype:** controller, WAN/Site Sync, HR/Payroll và identity/authorization là giả lập hoặc stub; test chức năng không thay cho đo hiệu năng (2 giây, 800 lượt/30 phút) hay đánh giá bảo mật.
 - **Thành phần hỗ trợ demo:** Bộ cấp mã QR Ed25519 (một thành phần của `M4 QrCredentialIssuance`) và bộ mô phỏng cửa xoay `TurnstileAdapter` (`M2 Turnstile Integration`) chỉ kích hoạt ở chế độ demo (`demo_mode=True`).
 
 ---
@@ -60,7 +61,7 @@ src/tmc_gate/
 ├── ports/           # Hợp đồng giao tiếp (Interfaces) chuẩn ISP & DIP (§7.1.4, §7.1.5). Chỉ import domain/.
 │   ├── inbound.py   # IScanSubmission, IInterventionRequest, IFactoryUpdates, GateCoreApi, GateInterventionApi
 │   ├── turnstile.py # IOpenGate, ICloseGate, IEmergencyGate, IPassageEvents, IControllerStatusQuery, ITurnstileControl
-│   └── repositories.py # IUnitOfWork, IScanRepository, IAttendanceRepository, IOutboxRepository, IAuditApi, IAuthorizationApi...
+│   └── repositories.py # IUnitOfWork, IScanRepository, IPassageWindowQuery, IAttendanceRepository, IOutboxRepository, ISnapshotRepository, IAuditApi, IAuthorizationApi...
 ├── application/     # Nghiệp vụ điều phối M1 Gate Core & M3 Gate Intervention. Chỉ import domain/ và ports/.
 │   ├── access_decision.py # AccessDecision (SRP: kiểm tra QR Ed25519 + EligibilitySnapshot)
 │   ├── processor.py       # GateTransactionProcessor (SRP: điều phối Flow A & Flow B, giữ trạng thái cổng)
@@ -98,7 +99,7 @@ src/tmc_gate/
 | **S – Single Responsibility Principle (SRP)** | • `domain/snapshot.py` (`EligibilitySnapshot`)<br>• `application/access_decision.py` (`AccessDecision`)<br>• `application/processor.py` (`GateTransactionProcessor`)<br>• `application/intervention.py` (`InterventionService`)<br>• `adapters/sqlite_repos.py` (`SqliteUnitOfWork`, Repositories) | • Mỗi class chỉ có duy nhất một lý do để thay đổi:<br>  - `EligibilitySnapshot` chỉ giữ dữ liệu & phân loại operating mode.<br>  - `AccessDecision` chỉ đánh giá chữ ký số & quyền (không ghi đĩa hay mở cổng).<br>  - `GateTransactionProcessor` chỉ điều phối luồng cổng và trạng thái làn.<br>  - `InterventionService` chỉ điều phối can thiệp bảo vệ & ủy quyền server-side.<br>  - `SqliteUnitOfWork` chỉ quản lý ranh giới commit/rollback giao dịch. |
 | **O – Open/Closed Principle (OCP)** | • `ports/turnstile.py` (`ITurnstileControl`, `IOpenGate`, `ICloseGate`, `IEmergencyGate`)<br>• `adapters/turnstile_adapter.py` (`SimulatedTurnstileAdapter`) | • Hệ thống mở rộng đón nhận các dòng phần cứng cửa xoay mới (như Flap Barrier, Swing Barrier, Tripod từ các hãng khác) chỉ bằng cách viết thêm Adapter mới thực thi `ITurnstileControl` mà không cần sửa đổi bất kỳ dòng code nghiệp vụ nào trong `GateTransactionProcessor`. |
 | **L – Liskov Substitution Principle (LSP)** | • `ports/turnstile.py` (`ITurnstileControl`)<br>• `adapters/turnstile_adapter.py` (`SimulatedTurnstileAdapter`, `FaultyTurnstileAdapter`)<br>• `tests/test_pkg5_turnstile_contract.py` | • Mọi adapter thay thế cho `ITurnstileControl` phải tuân thủ đúng hợp đồng hành vi (§7.1.3):<br>  - Phân biệt rõ giữa đã nhận lệnh (`RECEIPT_ONLY`), xác nhận mở (`OPEN_CONFIRMED`), lỗi từ chối (`CONTROLLER_ERROR`) và bất định/timeout (`UNDETERMINED`).<br>  - Minh họa trực quan qua bộ test hợp đồng chạy song song trên adapter chuẩn và adapter lỗi mà không gây crash hệ thống. |
-| **I – Interface Segregation Principle (ISP)** | • `ports/inbound.py` (`IScanSubmission`, `IInterventionRequest`, `IFactoryUpdates`)<br>• `ports/turnstile.py` (`IOpenGate`, `ICloseGate`, `IEmergencyGate`, `IPassageEvents`, `IControllerStatusQuery`) | • Phân tách giao diện theo đúng vai trò tác nhân (§7.1.4):<br>  - Kiosk Kiosk (`StationClient`) chỉ thấy `IScanSubmission`, không thể kích hoạt lệnh khẩn cấp của bảo vệ.<br>  - Module `M3 Gate Intervention` chỉ dùng `IInterventionRequest`.<br>  - Tách bạch lệnh gửi đi (`IOpenGate`...) và tín hiệu cảm biến nhận về (`IPassageEvents`: chỉ có `onPassage` và `onLaneClear`). |
+| **I – Interface Segregation Principle (ISP)** | • `ports/inbound.py` (`IScanSubmission`, `IInterventionRequest`, `IFactoryUpdates`)<br>• `ports/turnstile.py` (`IOpenGate`, `ICloseGate`, `IEmergencyGate`, `IPassageEvents`, `IControllerStatusQuery`)<br>• `ports/repositories.py` (`IPassageWindowQuery` tách khỏi `IScanRepository`) | • Phân tách giao diện theo đúng vai trò tác nhân (§7.1.4):<br>  - Kiosk Kiosk (`StationClient`) chỉ thấy `IScanSubmission`, không thể kích hoạt lệnh khẩn cấp của bảo vệ.<br>  - Module `M3 Gate Intervention` chỉ dùng `IInterventionRequest`.<br>  - Tách bạch lệnh gửi đi (`IOpenGate`...) và tín hiệu cảm biến nhận về (`IPassageEvents`: chỉ có `onPassage` và `onLaneClear`).<br>  - Worker timeout 15 giây chỉ dùng port đọc `IPassageWindowQuery` (`list_cycles_awaiting_passage`, `get_cycle_by_scan`), không phụ thuộc toàn bộ `IScanRepository`. |
 | **D – Dependency Inversion Principle (DIP)** | • `src/tmc_gate/application/*`<br>• `src/tmc_gate/ports/*`<br>• `src/tmc_gate/api/app.py`<br>• `tests/test_architecture_solid.py` | • Tầng nghiệp vụ (`application/`) chỉ phụ thuộc vào trừu tượng (`domain/` và `ports/`), hoàn toàn không import `sqlite3`, `fastapi`, hay các class trong `adapters/`.<br>• Toàn bộ phụ thuộc được lắp ghép tại điểm khởi tạo duy nhất (`app.py` - Composition Root). Kiểm tra tự động bằng bài test AST (`test_architecture_solid.py`). |
 
 ---
@@ -132,8 +133,16 @@ pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py tes
 
 ### Bước 3: Khởi động server FastAPI & Mở Swagger UI
 ```bash
-uvicorn tmc_gate.api.app:app --reload --app-dir src
+# Dữ liệu trong bộ nhớ (mất khi tắt server)
+uvicorn tmc_gate.api.app:app --app-dir src
+
+# Lưu vào file SQLite để demo khởi động lại vẫn giữ dữ liệu
+# Linux/macOS/Git Bash:
+TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --app-dir src
+# Windows PowerShell:
+$env:TMC_GATE_DB="factory.sqlite3"; uvicorn tmc_gate.api.app:app --app-dir src
 ```
+Không dùng `--reload` khi demo với file: chế độ reload khởi động lại tiến trình mỗi khi sửa code. Khi mở lại một file cũ, snapshot đã lưu có watermark cũ nên có thể rơi vào `CANNOT_PROCESS`; gọi `POST /api/demo/watermark-age` với `watermarkAgeSeconds=10` để làm mới.
 Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/docs`**
 
 ---

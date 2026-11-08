@@ -553,7 +553,8 @@ def test_15s_timeout_degraded_alerts_assisted_and_emergency_reset() -> None:
     cycle = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
     assert cycle is not None
     close_count = len(turnstile.close_calls)
-    assert processor.handlePassageTimeout(cycle.cycleId) is True
+    # The timer fires just after the 15-second window
+    assert processor.handlePassageTimeout(cycle.cycleId, now=cycle.observationDeadline + timedelta(milliseconds=1)) is True
     assert len(turnstile.close_calls) == close_count
     assert scan_repo.get_scan("scan-timeout-15s").state == ScanState.PENDING_RECONCILIATION
     assert res_open.commandId is not None

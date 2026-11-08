@@ -6,6 +6,7 @@ Transaction rule:
 """
 
 from abc import ABC, abstractmethod
+from datetime import datetime
 from types import TracebackType
 
 from tmc_gate.domain.enums import DedupStatus
@@ -146,6 +147,22 @@ class IScanRepository(ABC):
 
         Gate Core uses it so a repeated assisted-open or emergency request never sends a second command (§4.2.3).
         """
+
+
+class IPassageWindowQuery(ABC):
+    """Optional read port for the 15-second passage timeout (ISP: kept apart from IScanRepository).
+
+    A cycle keeps waiting for PASSAGE after LANE_CLEAR/CLOSED released its lane, so the timeout cannot find it
+    through the lane reservation; this port looks cycles up by their own state.
+    """
+
+    @abstractmethod
+    def list_cycles_awaiting_passage(self, deadline_before: datetime) -> list[GateCycle]:
+        """Cycles still WAITING for PASSAGE whose observation deadline is before `deadline_before`."""
+
+    @abstractmethod
+    def get_cycle_by_scan(self, scanId: str) -> GateCycle | None:
+        """The GateCycle opened for this scan, whether or not it still holds its lane."""
 
 
 class IAttendanceRepository(ABC):
