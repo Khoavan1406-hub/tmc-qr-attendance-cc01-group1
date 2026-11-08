@@ -123,6 +123,86 @@ class GateTransactionProcessor(IPassageEvents):
         delta_us = (delta.days * 86_400 + delta.seconds) * 1_000_000 + delta.microseconds
         return delta_us // 1000
 
+    def _budget_left_ms(self, budget_end_ms: int) -> int:
+        """Time left in this scan's single budget, measured on the monotonic clock at the moment of the call.
+
+        Every storage wait and the openGate timeout take what is left now, never the budget computed at entry.
+        """
+        return budget_end_ms - self._monotonic_ms()
+
+    def _begin_within_budget(self, budget_end_ms: int, scanId: str, laneId: str) -> bool | None:
+        """Begin a UnitOfWork with the time left in the scan budget.
+
+        None when the budget is already spent (no wait is started), False when storage stays busy or is unavailable
+        for the time left, True when the transaction began.
+        """
+        left_ms = self._budget_left_ms(budget_end_ms)
+        if left_ms <= 0:
+            return None
+        return self._try_begin(left_ms, scanId, laneId)
+
+    def _try_begin(self, timeout_ms: int, scanId: str, laneId: str) -> bool:
+        """Begin a UnitOfWork within the scan budget. False when storage is busy or unavailable.
+
+        On False nothing was started, so the caller must not roll back (on a shared connection that could discard
+        another request's transaction).
+        """
+        try:
+            self._uow.begin(timeout_ms=timeout_ms)
+        except Exception:
+            self._health_api.report_event_async({"alert": "STORAGE_BUSY_OR_UNAVAILABLE", "scanId": scanId, "laneId": laneId})
+            return False
+        return True
+
+    def _store_scan_within_budget(
+        self, scan: ScanAttempt, audit_payload: dict[str, object], budget_end_ms: int
+    ) -> bool | None:
+        """Persist a terminal scan (REJECTED / CANNOT_PROCESS) and its audit record.
+
+        None when the scan budget is spent before the wait, False if storage is busy or fails, True when stored.
+        """
+        began = self._begin_within_budget(budget_end_ms, scan.scanId, scan.laneId)
+        if not began:
+            return began
+        try:
+            self._scan_repo.save_scan(scan, audit_payload=audit_payload)
+            self._uow.commit()
+        except Exception:
+            self._uow.rollback()
+            self._health_api.report_event_async(
+                {"alert": "STORAGE_BUSY_OR_UNAVAILABLE", "scanId": scan.scanId, "laneId": scan.laneId}
+            )
+            return False
+        return True
+
+    @staticmethod
+    def _budget_spent_result(scanId: str, laneId: str, degraded: bool = False) -> ScanResult:
+        """The scan budget ran out before the next step could start; nothing new is claimed or sent."""
+        return ScanResult(
+            scanId=scanId,
+            state=ScanState.CANNOT_PROCESS,
+            laneId=laneId,
+            degradedFlag=degraded,
+            reason="REQUEST_DEADLINE_EXPIRED_BEFORE_COMMAND",
+        )
+
+    def _storage_unreachable_result(
+        self, began: bool | None, scanId: str, laneId: str, degraded: bool = False
+    ) -> ScanResult:
+        if began is None:
+            return self._budget_spent_result(scanId, laneId, degraded)
+        return self._storage_busy_result(scanId, laneId, degraded)
+
+    @staticmethod
+    def _storage_busy_result(scanId: str, laneId: str, degraded: bool = False) -> ScanResult:
+        return ScanResult(
+            scanId=scanId,
+            state=ScanState.CANNOT_PROCESS,
+            laneId=laneId,
+            degradedFlag=degraded,
+            reason="STORAGE_BUSY_OR_UNAVAILABLE",
+        )
+
     def processScan(
         self,
         scanId: str,
@@ -139,8 +219,20 @@ class GateTransactionProcessor(IPassageEvents):
         start_ms = self._monotonic_ms()
         eff_deadline = deadline or (current_time + timedelta(milliseconds=self.SCAN_DEADLINE_BUDGET_MS))
 
-        # Step A2: Duplicate scanId check (idempotent retry from kiosk; never downgrades stored OPENED)
-        existing = self._scan_repo.get_scan(scanId)
+        # One budget per scan: a single monotonic end point shared by A2, A4, the rejection/replay audit and the
+        # openGate timeout. Each step takes only the time left when it starts (§4.2.5, §5.4).
+        budget_end_ms = start_ms + self._remaining_ms(current_time, eff_deadline)
+
+        # Step A2: Duplicate scanId check (idempotent retry from kiosk; never downgrades stored OPENED).
+        # The read runs in a UnitOfWork so that waiting for another request's open transaction is bounded by
+        # the scan budget instead of blocking without limit; it never sees uncommitted rows.
+        began = self._begin_within_budget(budget_end_ms, scanId, laneId)
+        if not began:
+            return self._storage_unreachable_result(began, scanId, laneId)
+        try:
+            existing = self._scan_repo.get_scan(scanId)
+        finally:
+            self._uow.rollback()
         if existing is not None:
             return ScanResult(
                 scanId=existing.scanId,
@@ -151,14 +243,8 @@ class GateTransactionProcessor(IPassageEvents):
             )
 
         # Timeout rule 1 (§4.2.5, §5.4): If request deadline has expired before sending command, return CANNOT_PROCESS
-        remaining_ms = self._remaining_ms(current_time, eff_deadline)
-        if remaining_ms <= 0:
-            return ScanResult(
-                scanId=scanId,
-                state=ScanState.CANNOT_PROCESS,
-                laneId=laneId,
-                reason="REQUEST_DEADLINE_EXPIRED_BEFORE_COMMAND",
-            )
+        if self._budget_left_ms(budget_end_ms) <= 0:
+            return self._budget_spent_result(scanId, laneId)
 
         # Step A3: Evaluate QR token and eligibility against local snapshot
         decision = self._access_decision.evaluate(qrToken=qrToken, laneId=laneId, now=current_time)
@@ -183,18 +269,19 @@ class GateTransactionProcessor(IPassageEvents):
                 snapshotVersion=decision.snapshotVersion,
                 reason=decision.reason,
             )
-            with self._uow:
-                self._scan_repo.save_scan(
-                    failed_attempt,
-                    audit_payload={
-                        "action": "SCAN_EVALUATED",
-                        "scanId": scanId,
-                        "laneId": laneId,
-                        "outcome": terminal_state.value,
-                        "reason": decision.reason,
-                    },
-                )
-                self._uow.commit()
+            stored = self._store_scan_within_budget(
+                failed_attempt,
+                {
+                    "action": "SCAN_EVALUATED",
+                    "scanId": scanId,
+                    "laneId": laneId,
+                    "outcome": terminal_state.value,
+                    "reason": decision.reason,
+                },
+                budget_end_ms,
+            )
+            if not stored:
+                return self._storage_unreachable_result(stored, scanId, laneId, degraded)
             return ScanResult(
                 scanId=scanId,
                 state=terminal_state,
@@ -244,14 +331,19 @@ class GateTransactionProcessor(IPassageEvents):
             issuedAt=current_time,
         )
 
-        self._uow.begin(timeout_ms=remaining_ms)
+        # Storage busy (another writer holds the database past the remaining budget) or unavailable:
+        # nothing is claimed and no command is sent. No rollback: this request never began a transaction.
+        # Budget already spent: nothing is claimed and no command is sent.
+        began = self._begin_within_budget(budget_end_ms, scanId, laneId)
+        if not began:
+            return self._storage_unreachable_result(began, scanId, laneId, degraded)
         try:
             committed, status_reason = self._scan_repo.atomic_reserve_lane_claim_token_and_accept(
                 scan=accepted_attempt,
                 reservation=reservation,
                 cycle=cycle,
                 command=open_command,
-                timeout_ms=remaining_ms,
+                timeout_ms=max(0, self._budget_left_ms(budget_end_ms)),
             )
             if committed:
                 self._uow.commit()
@@ -283,17 +375,18 @@ class GateTransactionProcessor(IPassageEvents):
                     snapshotVersion=decision.snapshotVersion,
                     reason="QR_TOKEN_REPLAY_DETECTED",
                 )
-                with self._uow:
-                    self._scan_repo.save_scan(
-                        replay_scan,
-                        audit_payload={
-                            "action": "QR_REPLAY_REJECTED",
-                            "scanId": scanId,
-                            "tokenId": decision.claims.tokenId,
-                            "laneId": laneId,
-                        },
-                    )
-                    self._uow.commit()
+                stored = self._store_scan_within_budget(
+                    replay_scan,
+                    {
+                        "action": "QR_REPLAY_REJECTED",
+                        "scanId": scanId,
+                        "tokenId": decision.claims.tokenId,
+                        "laneId": laneId,
+                    },
+                    budget_end_ms,
+                )
+                if not stored:
+                    return self._storage_unreachable_result(stored, scanId, laneId, degraded)
                 return ScanResult(
                     scanId=scanId,
                     state=ScanState.REJECTED,
@@ -310,8 +403,7 @@ class GateTransactionProcessor(IPassageEvents):
             )
 
         # Deadline re-check right before the command (Flow A only). ACCEPTED is stored and the token is claimed.
-        elapsed_ms = self._monotonic_ms() - start_ms
-        remaining_ms = remaining_ms - elapsed_ms
+        remaining_ms = self._budget_left_ms(budget_end_ms)
         if remaining_ms <= 0:
             # The command was certainly not sent: release the lane, but the claimed token stays claimed (§7.3.4).
             with self._uow:
