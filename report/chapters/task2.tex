@@ -20,11 +20,11 @@ We chose Gate Core because it carries the hardest rules in the design: the 2-sec
 \endhead
 \multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.1. Scope of the Task 2 Prototype}} \\
 \endlastfoot
-M1 Gate Core & Implemented & Access check against the factory snapshot, the atomic write of ACCEPTED, TokenReservation, and GateCycle before openGate, PASSAGE and LANE\_CLEAR handling, attendance only after a stored passage, degraded mode, and the Gate Core side of assisted and emergency opening. \\
+M1 Gate Core & Implemented & Access check against the factory snapshot, the atomic write of ACCEPTED, TokenReservation, and GateCycle before openGate, PASSAGE and LANE\_CLEAR handling, attendance only after a stored passage, the 15-second passage timeout driven by a background worker, degraded mode, and the Gate Core side of assisted and emergency opening, where an emergency takes priority over an open result that arrives late. \\
 \hline
 M3 Gate Intervention & Implemented & Guard identity from the session, server-side authority check, write-once support cases, assisted opening, emergency release, and emergency reset. \\
 \hline
-Factory storage (SQLite) & Implemented & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core: the atomic accept write, the token claim per factory, passage and attendance in one transaction, the outbox, and event deduplication. \\
+Factory storage (SQLite) & Implemented & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core: the atomic accept write, the token claim per factory, passage and attendance in one transaction, the outbox, event deduplication, and the eligibility snapshot, which is stored in the same transaction as its deduplication mark. \\
 \hline
 M2 Turnstile Adapter & Simulated & SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the turnstile ports against a simulated controller. Both pass the same contract tests, and SimulatedTurnstileAdapter also answers status queries. No real controller is connected. \\
 \hline
@@ -82,7 +82,7 @@ To run the tests and the demo from the repository root:
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \texttt{pip install -r requirements.txt}
   \item \texttt{PYTHONPATH=src pytest}
-  \item \texttt{PYTHONPATH=src uvicorn tmc\_gate.api.app:app}
+  \item \texttt{PYTHONPATH=src uvicorn tmc\_gate.api.app:app} (data in memory), or with \texttt{TMC\_GATE\_DB=factory.sqlite3} set first to keep the data in a SQLite file across restarts
   \item open \code{http://localhost:8000/docs} in a browser
 \end{itemize}
 
@@ -103,11 +103,11 @@ The package \code{src/tmc_gate} follows the Entry, Business, and Persistence lay
 \endlastfoot
 \code{domain/} & Entities and states of Section 4.3 and Tables 4.23a--b: Lane, ScanAttempt, TokenReservation, GateCycle, GateCommand, PassageEvent, AttendanceTransaction, SupportCase, and EligibilitySnapshot with the 60-second and 30-minute limits. & Nothing outside \code{domain/} \\
 \hline
-\code{ports/} & Interfaces owned by Gate Core: IScanSubmission, IInterventionRequest, IFactoryUpdates, the turnstile ports, IUnitOfWork, and the repository and cross-cutting ports. & \code{domain/} \\
+\code{ports/} & Interfaces owned by Gate Core: IScanSubmission, IInterventionRequest, IFactoryUpdates, the turnstile ports, IUnitOfWork, the repository ports, IPassageWindowQuery, and the cross-cutting ports. & \code{domain/} \\
 \hline
 \code{application/} & AccessDecision, GateTransactionProcessor, GateCoreFacade, InterventionService, and GateInterventionFacade. & \code{domain/}, \code{ports/} \\
 \hline
-\code{adapters/} & SQLite repositories and unit of work, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers, plus \texttt{sqlite3} and \texttt{cryptography} \\*
+\code{adapters/} & SQLite repositories and unit of work, PassageTimeoutWorker, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers, plus \texttt{sqlite3} and \texttt{cryptography} \\*
 \hline\noalign{\nobreak}
 \code{api/} & FastAPI routers for the kiosk, the controller signals, the guard actions, and the demo helpers. \code{app.py} is the composition root that creates every object and passes the adapters in. & Everything \\
 \hline
@@ -137,14 +137,14 @@ OCP & A new controller is a new class that implements ITurnstileControl in \code
 \hline
 LSP & \code{ports/turnstile.py} fixes the result set of every command (OPEN\_RESULTS, CLOSE\_RESULTS, RELEASE\_RESULTS, RESET\_RESULTS). A receipt or a timeout has to come back as UNDETERMINED, never as OPEN\_CONFIRMED or CONTROLLER\_ERROR. & \code{test_pkg5_turnstile_contract.py} runs one contract against SimulatedTurnstileAdapter and FaultyTurnstileAdapter, and both pass. A third adapter that reports a receipt as OPEN\_CONFIRMED fails the same contract (\code{test_lsp_violating_adapter_fails_the_same_contract}, an expected failure). \\
 \hline
-ISP & GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, and the controller router only receives IPassageEvents. ITurnstileControl is built from IOpenGate, ICloseGate, and IEmergencyGate; IPassageEvents and IControllerStatusQuery stay separate (\code{ports/turnstile.py}). & \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear. \\*
+ISP & GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, and the controller router only receives IPassageEvents. ITurnstileControl is built from IOpenGate, ICloseGate, and IEmergencyGate; IPassageEvents and IControllerStatusQuery stay separate (\code{ports/turnstile.py}). The passage timeout reads cycles through its own small port, IPassageWindowQuery, instead of adding two methods to IScanRepository. & \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear. \\*
 \hline\noalign{\nobreak}
 DIP & GateTransactionProcessor receives its ports and IUnitOfWork in the constructor and never creates them. The application layer does not import \texttt{sqlite3}, \texttt{fastapi}, \code{adapters/}, or \code{api/}. & Three import tests in \code{test_architecture_solid.py}. \code{test_processor_requires_unit_of_work} checks that the processor refuses to run without a unit of work. \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.4}SOLID Principles Mapped to the Code}
 
-We wrote the ports first, merged them before the other packages, and then treated them as frozen. This let six people work in parallel against fakes, and it is also the practical test of DIP: Packages 1, 3, and 6 were finished and tested before the SQLite repositories and the turnstile adapter existed.
+We wrote the ports first, merged them before the other packages, and then treated them as frozen. This let six people work in parallel against fakes, and it is also the practical test of DIP: Packages 1, 3, and 6 were finished and tested before the SQLite repositories and the turnstile adapter existed. Only one port was added after that. A submission review showed that a cycle with no PASSAGE stayed OPENED forever, because nothing called the timeout. The fix needed to find waiting cycles by their own state, even after LANE\_CLEAR had released the lane, so we added the read port IPassageWindowQuery (\code{list_cycles_awaiting_passage}, \code{get_cycle_by_scan}). SqliteScanRepository implements it, and PassageTimeoutWorker in \code{adapters/} calls GateTransactionProcessor.sweepPassageTimeouts every 0.25 seconds. The worker only drives time: the processor checks the deadline and the states inside a transaction, and the timer still never sends closeGate.
 
 \Needspace{9\baselineskip}
 \subsection*{9.5. Design Rules Checked by Tests}
@@ -178,6 +178,12 @@ ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use cl
 Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one command per supportCaseId; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py} \\*
 \hline\noalign{\nobreak}
 Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED ends the hold. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py} \\
+\hline
+Flow B & An emergency wins over an open result that arrives after it: a late OPEN\_CONFIRMED creates no attendance, and a late CONTROLLER\_ERROR does not release the held lane. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
+\hline
+Table 4.23b & With no PASSAGE within 15 seconds, the worker moves the cycle to NO\_PASSAGE and the scan to PENDING\_RECONCILIATION, also after LANE\_CLEAR has closed the lane; a PASSAGE committed before the timer wins. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
+\hline
+Section 5.7.2, ADR-05 & Applied access rights survive a restart, a replayed update stays applied, a rolled-back snapshot write is never visible, and a scan does not wait for another request's transaction to read the snapshot. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \tofill{+ snapshot isolation test} \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.5}Design Rules and Their Tests}
@@ -217,7 +223,9 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_e2e_sqlite_flows.py} & Flow A (7 tests) and Flow B (3 tests) through \code{create_app()} & 10 & SQLite file, Ed25519, simulated controller \\
 \hline
-\multicolumn{2}{|l|}{\textbf{Total} (commit dd7b7fb, Python 3.12)} & \textbf{436} & 0 skipped, 1 expected failure \\
+\code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} & Emergency priority, 15-second timeout worker, snapshot after restart & \tofill{n} & SQLite file through \code{create_app()} \\
+\hline
+\multicolumn{2}{|l|}{\textbf{Total} (commit \tofill{hash}, Python 3.12)} & \textbf{\tofill{n}} & 0 skipped, 1 expected failure \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.6}Test Results of the Submitted Version}

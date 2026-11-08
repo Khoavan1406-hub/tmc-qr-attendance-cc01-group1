@@ -1,4 +1,4 @@
-"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (checked again on dev dd7b7fb, 08/11/2026).
+"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (updated for PR #15: IPassageWindowQuery, PassageTimeoutWorker, 08/11/2026).
 
 Usage: python fig418_classes.py > ../class/figure-4-18-gate-core-classes.drawio
 Panel A: application classes, ports owned by Gate Core, and the adapters that implement them.
@@ -109,7 +109,7 @@ ASSOC = "edgeStyle=orthogonalEdgeStyle;rounded=0;endArrow=none;strokeColor=#0000
 W = 1120
 
 # ===================================================================== Panel A
-AH = 830
+AH = 860
 zone(0, 0, W, AH, "application/  ·  ports/  ·  adapters/   (M1 Gate Core, with M3 Gate Intervention as a second client)")
 
 i_upd = box("IFactoryUpdates", 20, 44, 250, stereo="interface", iface=True)
@@ -129,7 +129,7 @@ proc = box(
     "GateTransactionProcessor", 300, 250, 500,
     attrs=["OPEN_COMMAND_BUDGET_MS = 700", "ASSISTED_OPEN_TIMEOUT_MS = 3000", "PASSAGE_OBSERVATION_WINDOW_MS = 15000"],
     ops=["processScan(scanId, qrToken, laneId): ScanResult", "onPassage(passageEventId, commandId, laneId)", "onLaneClear(commandId, laneId)",
-         "handlePassageTimeout(cycleId)", "requestAssistedOpen(supportCaseId, laneId)", "requestEmergencyRelease(…), …Reset(…)"],
+         "sweepPassageTimeouts(laneIds): int", "requestAssistedOpen(supportCaseId, laneId)", "requestEmergencyRelease(…), …Reset(…)"],
 )
 e(fac, proc, USE, start=(1, 0.25), end=(0, 0.25 * 0.0 + 0.137))
 
@@ -137,6 +137,8 @@ i_pe = box("IPassageEvents", 840, 250, 265, ops=["onPassage()", "onLaneClear()"]
 e(proc, i_pe, REAL, start=(1, 0.2), end=(0, 0.45))
 
 acc = box("AccessDecision", 20, 430, 245, ops=["evaluate(qrToken, laneId)", "  : DecisionResult"])
+wrk = box("PassageTimeoutWorker", 840, 430, 265, ops=["run_once(): int  (every 0.25 s)"], stereo="adapter", bold=False, fs=SMALL + 1)
+e(wrk, proc, USE, start=(0, 0.5), end=(1, 0.85))
 
 e(proc, acc, USE, start=(0, 0.75), end=(1, 0.5))
 
@@ -146,7 +148,7 @@ RH = 40
 def port(nm, x, y, w):
     return box(nm, x, y, w, iface=True, h=34, bold=False, fs=SMALL + 1)
 fr_store = frame(20, PY, 545, 30 + 3 * RH + 4, "storage ports (ports/repositories.py)")
-for k, nm in enumerate(["IUnitOfWork", "IScanRepository", "IAttendanceRepository", "ISnapshotRepository", "IOutboxRepository"]):
+for k, nm in enumerate(["IUnitOfWork", "IScanRepository", "IAttendanceRepository", "ISnapshotRepository", "IOutboxRepository", "IPassageWindowQuery"]):
     port(nm, 30 + (k % 2) * 265, PY + 30 + (k // 2) * RH, 258)
 fr_ctl = frame(580, PY, 525, 30 + 3 * RH + 4, "controller and cross-cutting ports")
 P = {}
@@ -157,7 +159,7 @@ e(proc, fr_ctl, USE, start=(0.8, 1), end=(0.3, 0))
 e(acc, fr_store, USE, start=(0.5, 1), end=(0.23, 0))
 
 AY = PY + 30 + 3 * RH + 4 + 46
-sq = box("SqliteUnitOfWork, Sqlite…Repository ×4", 20, AY, 545, stereo="adapters", bold=False, fs=SMALL + 1)
+sq = box("SqliteUnitOfWork, Sqlite…Repository ×4<br><span style='font-size:16px'>SqliteScanRepository also implements IPassageWindowQuery</span>", 20, AY, 545, stereo="adapters", bold=False, fs=SMALL + 1, h=86)
 sim = box("SimulatedTurnstileAdapter", 580, AY, 258, stereo="adapter", bold=False, fs=SMALL + 1)
 fau = box("FaultyTurnstileAdapter", 848, AY, 257, stereo="adapter", bold=False, fs=SMALL + 1)
 e(sq, fr_store, REAL, start=(0.5, 0), end=(0.5, 1))
