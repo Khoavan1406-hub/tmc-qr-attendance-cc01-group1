@@ -1287,15 +1287,65 @@ The proposed classes for the gate flow keep the scan, the controller command, th
   \item \textbf{PassageEvent} is stored before \textbf{AttendanceTransaction} is created. The data model allows at most one original transaction per scanId and accepts each passageEventId once.
 \end{itemize}
 
+The class diagrams below are drawn from the Task 2 code (Chapter 9), so the names are the ones in \code{src/tmc_gate}. In all three figures a solid arrow means that a class uses another one, a dashed arrow with a hollow triangle means that it implements an interface, a solid line with a hollow triangle means that an interface extends another one, and interface names are in italics. Only the operations needed to follow the flow are shown.
+
+\Needspace{12\baselineskip}
+\subsubsection*{4.3.1. Scan Flow}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{4.3.1. Scan Flow}
+
 \noindent\begin{minipage}{\linewidth}
 \centering
-\IfFileExists{diagram/class/figure-4-18-gate-core-classes.png}{\includegraphics[width=450.0pt,height=590.0pt,keepaspectratio]{diagram/class/figure-4-18-gate-core-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+\IfFileExists{diagram/class/figure-4-18-scan-flow-classes.png}{\includegraphics[width=\linewidth,height=330pt,keepaspectratio]{diagram/class/figure-4-18-scan-flow-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
 
 \vspace{6pt}
-\textbf{Figure 4.18. Class Diagram of Gate Core for the Gate Flow}
-\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.18}Class Diagram of Gate Core for the Gate Flow}
+\textbf{Figure 4.18. Class Diagram of the Scan Flow}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.18}Class Diagram of the Scan Flow}
 \end{minipage}
 
 \vspace{10pt}
 
-Figure 4.18 shows these classes and their multiplicities, including the rule that a Lane has at most one active GateCycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
+Figure 4.18 shows the classes behind a QR scan (Flow A). The kiosk route in the \code{gate_controller} router only knows IScanSubmission. GateCoreFacade implements it through GateCoreApi and hands the scan to GateTransactionProcessor, which is the only class that coordinates the flow. The processor asks AccessDecision for the decision, and AccessDecision reads the EligibilitySnapshot through ISnapshotRepository. Every other dependency of the processor is an interface: IScanRepository and IUnitOfWork for the transaction, IOpenGate and IControllerStatusQuery for the controller, and IAuditApi for audit evidence. All of them are passed in through the constructor in \code{app.py}.
+
+The two budgets in the processor come from Table 5.5: the whole scan must finish within 2 seconds, and openGate gets at most 700 ms of that time. The processor stores the ACCEPTED scan, its TokenReservation, and the new GateCycle in one transaction before it sends openGate, so a crash after the command still leaves evidence that the lane is taken.
+
+\Needspace{12\baselineskip}
+\subsubsection*{4.3.2. Controller Signals and Gate Intervention}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{4.3.2. Controller Signals and Gate Intervention}
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\IfFileExists{diagram/class/figure-4-19-signals-intervention-classes.png}{\includegraphics[width=\linewidth,height=420pt,keepaspectratio]{diagram/class/figure-4-19-signals-intervention-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+
+\vspace{6pt}
+\textbf{Figure 4.19. Class Diagram of Controller Signals and Gate Intervention}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.19}Class Diagram of Controller Signals and Gate Intervention}
+\end{minipage}
+
+\vspace{10pt}
+
+Figure 4.19 shows the other ways into Gate Core. PASSAGE and LANE\_CLEAR from the controller arrive at \code{gate_controller} and go to GateTransactionProcessor through IPassageEvents. PassageTimeoutWorker calls sweepPassageTimeouts every 0.25 seconds. The processor then uses IPassageWindowQuery to find the cycles whose 15-second window has ended. This timer never sends closeGate.
+
+Guard actions (Flow B) take a separate path. \code{intervention_controller} gets the guard from the session through IGuardIdentityApi, and InterventionService checks the guard's authority through IAuthorizationApi before it calls Gate Core. InterventionService only sees IInterventionRequest, not the whole GateCoreApi, which is the ISP split of Section 7.1. The turnstile ports are also split: one adapter class implements ITurnstileControl, but the processor depends on IOpenGate, ICloseGate, and IEmergencyGate one by one. FaultyTurnstileAdapter is a second implementation that the contract tests use to check the LSP rule (Section 9.4).
+
+\Needspace{12\baselineskip}
+\subsubsection*{4.3.3. Gate Core Entities}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{4.3.3. Gate Core Entities}
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\IfFileExists{diagram/class/figure-4-20-gate-core-entities.png}{\includegraphics[width=\linewidth,height=420pt,keepaspectratio]{diagram/class/figure-4-20-gate-core-entities.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+
+\vspace{6pt}
+\textbf{Figure 4.20. Gate Core Entities and Their Multiplicities}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.20}Gate Core Entities and Their Multiplicities}
+\end{minipage}
+
+\vspace{10pt}
+
+Figure 4.20 shows the entities and their multiplicities, including the rule that a Lane has at most one active GateCycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.

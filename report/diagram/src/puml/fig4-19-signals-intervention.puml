@@ -1,0 +1,103 @@
+@startuml
+!include style.iuml
+
+class "gate_controller" as GC <<presentation>> {
+  +POST /api/controller/signals/passage
+  +POST /api/controller/signals/lane-clear
+}
+class "intervention_controller" as IC <<presentation>> {
+  +POST /api/interventions/assisted-open
+  +POST /api/interventions/emergency-release
+  +POST /api/interventions/emergency-reset
+}
+interface IGuardIdentityApi {
+  +resolve_guard(sessionToken): str
+}
+class DemoGuardSessionStub <<adapter>>
+interface GateInterventionApi {
+  +authorizeAssistedOpen(supportCaseId, guardId, laneId)
+  +emergencyRelease(supportCaseId, guardId, laneId, reason)
+  +resetEmergency(supportCaseId, guardId, laneId)
+}
+class GateInterventionFacade
+class InterventionService {
+  +record_and_open_assisted(...): ScanResult
+  +trigger_emergency_release(...): ScanResult
+  +reset_emergency(...): ScanResult
+}
+interface IAuthorizationApi <<cross-cutting>> {
+  +is_authorized(actorId, role, action, factoryId): bool
+}
+interface IInterventionRequest {
+  +recordIntervention(case): bool
+  +requestAssistedOpen(supportCaseId, laneId, now)
+  +requestEmergencyRelease(supportCaseId, laneId, now)
+  +requestEmergencyReset(supportCaseId, laneId, now)
+}
+interface GateCoreApi
+class GateCoreFacade
+interface IPassageEvents {
+  +onPassage(passageEventId, commandId, laneId, occurredAt)
+  +onLaneClear(commandId, laneId, occurredAt)
+}
+class GateTransactionProcessor {
+  -PASSAGE_OBSERVATION_WINDOW_MS = 15000
+  -ASSISTED_OPEN_TIMEOUT_MS = 3000
+  +sweepPassageTimeouts(laneIds, now): int
+  +requestAssistedOpen(...): ScanResult
+  +requestEmergencyRelease(...): ScanResult
+  +requestEmergencyReset(...): ScanResult
+}
+class PassageTimeoutWorker <<adapter>> {
+  -interval_sec = 0.25
+  +start()
+  +stop()
+  +run_once(now): int
+}
+interface ITurnstileControl
+interface IOpenGate
+interface ICloseGate {
+  +closeGate(commandId, laneId)
+}
+interface IEmergencyGate {
+  +emergencyRelease(commandId, laneId)
+  +resetEmergency(commandId, laneId)
+}
+interface IPassageWindowQuery {
+  +list_cycles_awaiting_passage(deadline_before)
+  +get_cycle_by_scan(scanId): GateCycle
+}
+interface IAttendanceRepository {
+  +store_passage_and_attendance_atomic(...): bool
+  +get_by_scan_id(scanId): AttendanceTransaction
+}
+class SimulatedTurnstileAdapter <<adapter>>
+class FaultyTurnstileAdapter <<adapter>>
+class SqliteScanRepository <<adapter>>
+class SqliteAttendanceRepository <<adapter>>
+
+IC --> GateInterventionFacade
+IC --> IGuardIdentityApi
+DemoGuardSessionStub .up.|> IGuardIdentityApi
+GateInterventionFacade .up.|> GateInterventionApi
+GateInterventionFacade --> InterventionService
+InterventionService --> IAuthorizationApi
+InterventionService --> IInterventionRequest
+GateCoreApi -up-|> IInterventionRequest
+GateCoreFacade .up.|> GateCoreApi
+GateCoreFacade --> GateTransactionProcessor
+GC --> IPassageEvents
+GateTransactionProcessor .up.|> IPassageEvents
+PassageTimeoutWorker -right-> GateTransactionProcessor : sweep
+GateTransactionProcessor --> ICloseGate
+GateTransactionProcessor --> IEmergencyGate
+GateTransactionProcessor --> IPassageWindowQuery
+GateTransactionProcessor --> IAttendanceRepository
+ITurnstileControl -up-|> IOpenGate
+ITurnstileControl -up-|> ICloseGate
+ITurnstileControl -up-|> IEmergencyGate
+SimulatedTurnstileAdapter .up.|> ITurnstileControl
+FaultyTurnstileAdapter .up.|> ITurnstileControl
+SqliteScanRepository .up.|> IPassageWindowQuery
+SqliteAttendanceRepository .up.|> IAttendanceRepository
+@enduml

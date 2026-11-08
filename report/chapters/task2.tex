@@ -114,7 +114,31 @@ The package \code{src/tmc_gate} follows the Entry, Business, and Persistence lay
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.3}Folders of the Task 2 Code}
 
-Figure 4.18 in Section 4.3 is drawn from this code. It shows the classes of \code{domain/}, \code{ports/}, and \code{application/}, and the adapters that implement the ports. The HTTP endpoints map to the interfaces as follows: the kiosk uses \code{POST /api/gate/scans} and \code{GET /api/gate/scans/{id}} (IScanSubmission), the simulated controller uses \code{/api/controller/signals/passage} and \code{/lane-clear} (IPassageEvents), and guards use \code{/api/interventions/*} with an \texttt{X-Guard-Session} header (GateInterventionApi). Demo endpoints under \code{/api/demo/*} are only mounted when \code{demo_mode} is on.
+Figures 4.18 to 4.20 in Section 4.3 are drawn from this code. They show the classes of \code{domain/}, \code{ports/}, and \code{application/}, and the adapters that implement the ports. The HTTP endpoints map to the interfaces as follows: the kiosk uses \code{POST /api/gate/scans} and \code{GET /api/gate/scans/{id}} (IScanSubmission), the simulated controller uses \code{/api/controller/signals/passage} and \code{/lane-clear} (IPassageEvents), and guards use \code{/api/interventions/*} with an \texttt{X-Guard-Session} header (GateInterventionApi). Demo endpoints under \code{/api/demo/*} are only mounted when \code{demo_mode} is on.
+
+Figure 9.1 shows the tables that the SQLite adapters create in the factory database file, which is set by the \texttt{TMC\_GATE\_DB} variable. There is one table per Gate Core entity of Figure 4.20, plus the outbox, the deduplication marks of incoming events, local audit evidence, and the last applied eligibility snapshot.
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\IfFileExists{diagram/data/figure-9-1-data-view.png}{\includegraphics[width=\linewidth,height=470pt,keepaspectratio]{diagram/data/figure-9-1-data-view.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+
+\vspace{6pt}
+\textbf{Figure 9.1. Data View of the Factory Database in the Prototype}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.1}Data View of the Factory Database in the Prototype}
+\end{minipage}
+
+\vspace{10pt}
+
+The schema has no foreign key constraints, so the dashed lines in Figure 9.1 are references kept by the code, not by SQLite. The rules that matter for duplicates are enforced by keys instead:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item the primary key (factory\_id, token\_id) of \code{token_reservations} makes the claim of a QR token single-use, even for two connections at the same time;
+  \item \code{lanes.active_cycle_id} holds at most one active cycle for each lane;
+  \item \code{attendance_transactions} has unique scan\_id and passage\_event\_id, so one scan and one PASSAGE give at most one attendance record;
+  \item the primary key of \code{passage_events} and of \code{processed_events} (consumer, event\_id) turn a repeated signal or event into a duplicate instead of a second row.
+\end{itemize}
+
+A file database runs in write-ahead logging mode, and the unit of work wraps each step of a flow in one transaction.
 
 \Needspace{9\baselineskip}
 \subsection*{9.4. SOLID in the Code}

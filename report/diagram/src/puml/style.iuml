@@ -1,0 +1,22 @@
+' Shared style for the class diagrams and the data view (plain black-and-white UML)
+skinparam monochrome true
+skinparam shadowing false
+skinparam backgroundColor white
+skinparam defaultFontName "DejaVu Sans"
+skinparam defaultFontSize 13
+skinparam classAttributeIconSize 0
+skinparam classBorderThickness 1.2
+skinparam packageBorderThickness 1.2
+skinparam packageStyle rectangle
+skinparam packageFontStyle bold
+skinparam arrowThickness 1
+skinparam nodesep 40
+skinparam ranksep 55
+skinparam dpi 200
+hide circle
+hide empty members
+skinparam roundCorner 0
+skinparam classBackgroundColor white
+skinparam packageBackgroundColor white
+skinparam classFontSize 14
+skinparam stereotypeFontSize 13
