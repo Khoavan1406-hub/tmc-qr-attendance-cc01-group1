@@ -144,8 +144,11 @@ def test_flow_b_emergency_release_and_reset_through_simulated_adapter() -> None:
     assert scan_repo.get_active_cycle_for_lane("LANE-BD-01").closureStatus == ClosureStatus.EMERGENCY_HOLD
 
     # Reset confirmed -> lane leaves EMERGENCY_HOLD
-    client.simulated_reset_mode = "RESET_CONFIRMED"
-    processor.requestEmergencyReset(supportCaseId="emg-p5-1", laneId="LANE-BD-01")
+    # Repeating the request queries the stored RESET command; it is not sent again with a new commandId
+    client.simulated_query_status = "CONFIRMED"
+    repeat = processor.requestEmergencyReset(supportCaseId="emg-p5-1", laneId="LANE-BD-01")
+    assert repeat.commandId == pending.commandId
+    assert _actions(client).count(ACTION_RESET) == 1
     after = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
     assert after is None or after.closureStatus != ClosureStatus.EMERGENCY_HOLD
     assert _actions(client)[0] == ACTION_EMERGENCY_RELEASE

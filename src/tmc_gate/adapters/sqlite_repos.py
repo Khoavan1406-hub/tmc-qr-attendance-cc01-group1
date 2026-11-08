@@ -105,7 +105,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             closure_status TEXT NOT NULL,
             observation_deadline TEXT NOT NULL,
             lane_clear_received INTEGER NOT NULL DEFAULT 0,
-            close_command_id TEXT
+            close_command_id TEXT,
+            emergency_support_case_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS gate_commands (
@@ -185,9 +186,24 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
     )
     # Upgrade existing factory files without discarding stored evidence.
     with SqliteUnitOfWork(conn) as uow:
-        for table, column in (("gate_cycles", "close_command_id"), ("passage_events", "review_reason")):
+        for table, column in (
+            ("gate_cycles", "close_command_id"),
+            ("gate_cycles", "emergency_support_case_id"),
+            ("passage_events", "review_reason"),
+        ):
             if column not in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Cycles stored before emergency_support_case_id existed: the emergency that holds the lane is the
+        # LATEST emergencyRelease command of that cycle, not the cycle's first support case.
+        conn.execute(
+            """UPDATE gate_cycles SET emergency_support_case_id = (
+                   SELECT c.support_case_id FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE'
+                   ORDER BY c.rowid DESC LIMIT 1)
+               WHERE emergency_support_case_id IS NULL AND EXISTS (
+                   SELECT 1 FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE')"""
+        )
         token_pk = {row["name"] for row in conn.execute("PRAGMA table_info(token_reservations)") if row["pk"]}
         if token_pk == {"token_id"}:
             conn.execute("ALTER TABLE token_reservations RENAME TO token_reservations_legacy")
@@ -228,6 +244,7 @@ def _read_cycle(row: sqlite3.Row) -> GateCycle:
         closureStatus=ClosureStatus(row["closure_status"]),
         observationDeadline=datetime.fromisoformat(row["observation_deadline"]),
         laneClearReceived=bool(row["lane_clear_received"]), closeCommandId=row["close_command_id"],
+        emergencySupportCaseId=row["emergency_support_case_id"],
     )
 
 
@@ -393,10 +410,10 @@ class SqliteScanRepository(IScanRepository, IPassageWindowQuery):
             )
 
     def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
-        """Find the command for both the support case and requested command type."""
+        """Find the latest command for both the support case and requested command type."""
         with self._lock:
             row = self._conn.execute(
-                "SELECT * FROM gate_commands WHERE support_case_id = ? AND command_type = ? ORDER BY rowid LIMIT 1",
+                "SELECT * FROM gate_commands WHERE support_case_id = ? AND command_type = ? ORDER BY rowid DESC LIMIT 1",
                 (supportCaseId, commandType),
             ).fetchone()
             return _read_command(row) if row is not None else None
@@ -564,16 +581,17 @@ class SqliteScanRepository(IScanRepository, IPassageWindowQuery):
             self._conn.execute(
                 """INSERT INTO gate_cycles
                     (cycle_id, lane_id, scan_id, support_case_id, passage_status, closure_status,
-                     observation_deadline, lane_clear_received, close_command_id)
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                     observation_deadline, lane_clear_received, close_command_id, emergency_support_case_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     ON CONFLICT(cycle_id) DO UPDATE SET
                         lane_id = excluded.lane_id, scan_id = excluded.scan_id,
                         support_case_id = excluded.support_case_id, passage_status = excluded.passage_status,
                         closure_status = excluded.closure_status, observation_deadline = excluded.observation_deadline,
-                        lane_clear_received = excluded.lane_clear_received, close_command_id = excluded.close_command_id""",
+                        lane_clear_received = excluded.lane_clear_received, close_command_id = excluded.close_command_id,
+                        emergency_support_case_id = excluded.emergency_support_case_id""",
                 (cycle.cycleId, cycle.laneId, cycle.scanId, cycle.supportCaseId, cycle.passageStatus.value,
                  cycle.closureStatus.value, cycle.observationDeadline.isoformat(), int(cycle.laneClearReceived),
-                 cycle.closeCommandId),
+                 cycle.closeCommandId, cycle.emergencySupportCaseId),
             )
             if command is not None:
                 self.save_command(command)
@@ -768,6 +786,7 @@ def _snapshot_to_json(snapshot: EligibilitySnapshot) -> str:
             "verificationKeys": [key.decode("ascii") for key in snapshot.verificationKeys],
             "employees": {
                 employee_id: {
+                    "employeeId": right.employeeId,
                     "active": right.active,
                     "allowedFactories": sorted(right.allowedFactories),
                     "allowedLanes": sorted(right.allowedLanes),
@@ -780,23 +799,56 @@ def _snapshot_to_json(snapshot: EligibilitySnapshot) -> str:
     )
 
 
+def _string_set(value: object) -> set[str]:
+    """A stored list of ids; set("BD") would silently become {"B", "D"}, so anything else is refused."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("stored snapshot has an invalid id list")
+    return set(value)
+
+
+def _same_snapshot(stored: EligibilitySnapshot, given: EligibilitySnapshot) -> bool:
+    """Field-by-field equality, with exact types for the flags and numbers the domain checks by type."""
+    keys = ("factoryId", "snapshotVersion", "confirmedWatermark", "clockErrorBoundSec", "isCompleteAndContinuous",
+            "verificationKeys", "employees", "lanes")
+    if any(getattr(stored, key) != getattr(given, key) for key in keys):
+        return False
+    for key in ("snapshotVersion", "clockErrorBoundSec", "isCompleteAndContinuous"):
+        if type(getattr(stored, key)) is not type(getattr(given, key)):
+            return False
+    return all(
+        type(stored.employees[eid].active) is type(right.active)
+        and type(right.allowedFactories) is set
+        and type(right.allowedLanes) is set
+        for eid, right in given.employees.items()
+    )
+
+
 def _snapshot_from_json(text: str) -> EligibilitySnapshot:
+    """Rebuild a snapshot without coercing any value.
+
+    bool("false") is True and int(2.5) is 2, so coercion would turn a snapshot that the domain rejects into one
+    it accepts. Values are passed through unchanged and EligibilitySnapshot / AccessDecision apply the same
+    checks as before storage; only structural decoding (timestamps, keys, lane directions) can fail here.
+    """
     data = json.loads(text)
+    employees = data["employees"]
     return EligibilitySnapshot(
         factoryId=data["factoryId"],
-        snapshotVersion=int(data["snapshotVersion"]),
+        snapshotVersion=data["snapshotVersion"],
         confirmedWatermark=datetime.fromisoformat(data["confirmedWatermark"]),
         clockErrorBoundSec=data["clockErrorBoundSec"],
-        isCompleteAndContinuous=bool(data["isCompleteAndContinuous"]),
+        isCompleteAndContinuous=data["isCompleteAndContinuous"],
         verificationKeys=tuple(key.encode("ascii") for key in data["verificationKeys"]),
         employees={
             employee_id: EmployeeRight(
-                employeeId=employee_id,
-                active=bool(right["active"]),
-                allowedFactories=set(right["allowedFactories"]),
-                allowedLanes=set(right["allowedLanes"]),
+                # stored as given: a right whose own id differs from its key stays EMPLOYEE_NOT_FOUND
+                # (rows written before this field existed fall back to the key)
+                employeeId=right.get("employeeId", employee_id),
+                active=right["active"],
+                allowedFactories=_string_set(right["allowedFactories"]),
+                allowedLanes=_string_set(right["allowedLanes"]),
             )
-            for employee_id, right in data["employees"].items()
+            for employee_id, right in employees.items()
         },
         lanes={lane_id: Direction(direction) for lane_id, direction in data["lanes"].items()},
     )
@@ -866,6 +918,10 @@ class SqliteSnapshotRepository(ISnapshotRepository):
                 (snapshot.factoryId, snapshot.snapshotVersion, _snapshot_to_json(snapshot), datetime.now(UTC).isoformat()),
             )
             staged = _snapshot_from_json(_snapshot_to_json(snapshot))
+            if not _same_snapshot(staged, snapshot):
+                # The stored copy must decide exactly like the snapshot that was applied; anything lost or
+                # changed by storage (a type, an id) is refused and the UnitOfWork rolls back the update.
+                raise ValueError("eligibility snapshot cannot be stored without changing it")
             self._uow.after_commit(lambda: self._publish(staged))
 
     def _publish(self, snapshot: EligibilitySnapshot) -> None:

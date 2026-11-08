@@ -75,6 +75,9 @@ class GateCycle:
     supportCaseId: str | None = None
     laneClearReceived: bool = False
     closeCommandId: str | None = None
+    # supportCaseId of the emergency release that currently holds this cycle (the latest one). A reset result
+    # only applies to that emergency, so a reply for an older emergency cannot lift a newer hold.
+    emergencySupportCaseId: str | None = None
 
     def is_active_or_unresolved(self) -> bool:
         """Return True while the lane must remain reserved/busy (§4.2.2 Lane rules)."""
