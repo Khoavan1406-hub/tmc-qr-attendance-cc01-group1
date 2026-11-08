@@ -39,6 +39,25 @@ class WrongFactoryScope(QrVerificationError):
     """Raised when token audience does not match factory scope."""
 
 
+class InvalidValidityPeriod(QrVerificationError):
+    """Raised when the signed validity window is not 0 < exp - iat <= 60 s."""
+
+
+class QrTokenNotYetValid(QrVerificationError):
+    """Raised when iat lies in the future beyond the known clock error bound."""
+
+
+MAX_TOKEN_LIFETIME_MS = 60_000  # ADR-11: QR credentials are valid for at most 60 seconds
+
+
+def _bound_or_zero(bound_ms: int | None) -> int:
+    """Clock error bound in ms. 0 stays 0 (never widened); unknown is treated as 0 here because
+    evaluate() already returns CANNOT_PROCESS for an unknown or >= 2000 ms bound."""
+    if bound_ms is None or bound_ms < 0:
+        return 0
+    return min(int(bound_ms), 1_999)
+
+
 # Aliases for common exception names
 InvalidSignature = InvalidQrSignature
 TokenExpired = QrTokenExpired
@@ -65,6 +84,25 @@ def _load_public_key(key_data: bytes | Ed25519PublicKey) -> Ed25519PublicKey:
             return Ed25519PublicKey.from_public_bytes(raw)
         return load_pem_public_key(raw)
     raise ValueError(f"Unsupported key format: {type(key_data)}")
+
+
+def _parse_time_claim(value: object) -> tuple[datetime, int]:
+    """Return (aware datetime, epoch ms) for an iat/exp claim; anything else is malformed."""
+    if isinstance(value, bool):
+        raise MalformedQrToken("MALFORMED_QR_TOKEN")
+    if isinstance(value, (int, float)):
+        if value > 10_000_000_000:  # already epoch milliseconds
+            return datetime.fromtimestamp(value / 1000.0, tz=UTC), int(value)
+        return datetime.fromtimestamp(value, tz=UTC), int(value * 1000)
+    if isinstance(value, str):
+        try:
+            parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+        except ValueError as exc:
+            raise MalformedQrToken("MALFORMED_QR_TOKEN") from exc
+        if parsed.tzinfo is None:
+            parsed = parsed.replace(tzinfo=UTC)
+        return parsed, int(parsed.timestamp() * 1000)
+    raise MalformedQrToken("MALFORMED_QR_TOKEN")
 
 
 class AccessDecision:
@@ -130,6 +168,20 @@ class AccessDecision:
                 snapshotVersion=snapshot.snapshotVersion,
                 reason="QR_TOKEN_EXPIRED",
             )
+        except InvalidValidityPeriod:
+            return DecisionResult(
+                allowed=False,
+                operatingMode=mode,
+                snapshotVersion=snapshot.snapshotVersion,
+                reason="QR_VALIDITY_PERIOD_INVALID",
+            )
+        except QrTokenNotYetValid:
+            return DecisionResult(
+                allowed=False,
+                operatingMode=mode,
+                snapshotVersion=snapshot.snapshotVersion,
+                reason="QR_TOKEN_NOT_YET_VALID",
+            )
         except WrongFactoryScope:
             return DecisionResult(
                 allowed=False,
@@ -177,30 +229,31 @@ class AccessDecision:
         now: datetime | None = None,
         clock_error_bound_ms: int | None = None,
     ) -> TokenClaims:
-        """Verify Ed25519 signature against `snapshot.verificationKeys`, 60s lifetime (with clock skew),
+        """Verify Ed25519 signature against `snapshot.verificationKeys`, signed window 0 < exp - iat <= 60 s, iat not in the future
+        (beyond the clock bound), strict expiry now <= exp,
         and factory binding (§7.3.1, ADR-11).
         """
         # Resolve parameters flexibly
         if snapshot is not None:
             keys = snapshot.verificationKeys
             fac_id = snapshot.factoryId
-            bound_ms = snapshot.clockErrorBoundMs or 2000
+            bound_ms = _bound_or_zero(snapshot.clockErrorBoundMs)
             eval_now = now or (args[0] if len(args) > 0 and isinstance(args[0], datetime) else datetime.now(UTC))
         elif len(args) > 0 and isinstance(args[0], EligibilitySnapshot):
             snap = args[0]
             keys = snap.verificationKeys
             fac_id = snap.factoryId
-            bound_ms = snap.clockErrorBoundMs or 2000
+            bound_ms = _bound_or_zero(snap.clockErrorBoundMs)
             eval_now = args[1] if len(args) > 1 and isinstance(args[1], datetime) else (now or datetime.now(UTC))
         elif len(args) > 0 and isinstance(args[0], (tuple, list)):
             keys = tuple(args[0])
             fac_id = str(args[1]) if len(args) > 1 else (expected_factory_id or "")
             eval_now = args[2] if len(args) > 2 and isinstance(args[2], datetime) else (now or datetime.now(UTC))
-            bound_ms = int(args[3]) if len(args) > 3 and isinstance(args[3], (int, float)) else (clock_error_bound_ms or 2000)
+            bound_ms = int(args[3]) if len(args) > 3 and isinstance(args[3], (int, float)) else _bound_or_zero(clock_error_bound_ms)
         else:
             keys = verification_keys or ()
             fac_id = expected_factory_id or ""
-            bound_ms = clock_error_bound_ms or 2000
+            bound_ms = _bound_or_zero(clock_error_bound_ms)
             eval_now = now or datetime.now(UTC)
 
         if eval_now.tzinfo is None:
@@ -273,43 +326,23 @@ class AccessDecision:
         if aud != fac_id:
             raise WrongFactoryScope("WRONG_FACTORY_SCOPE")
 
-        # 5. Check expiration: Token is valid if now <= exp + 2000 (allowing up to 2000ms clock skew)
-        if isinstance(exp, (int, float)):
-            if exp > 10_000_000_000:
-                exp_ms = int(exp)
-                exp_dt = datetime.fromtimestamp(exp / 1000.0, tz=UTC)
-            else:
-                exp_ms = int(exp * 1000)
-                exp_dt = datetime.fromtimestamp(exp, tz=UTC)
-        elif isinstance(exp, str):
-            exp_dt = datetime.fromisoformat(exp.replace("Z", "+00:00"))
-            if exp_dt.tzinfo is None:
-                exp_dt = exp_dt.replace(tzinfo=UTC)
-            exp_ms = int(exp_dt.timestamp() * 1000)
-        else:
-            raise MalformedQrToken("MALFORMED_QR_TOKEN")
+        # 5. Parse exp and iat (epoch seconds, epoch ms, or ISO-8601)
+        exp_dt, exp_ms = _parse_time_claim(exp)
+        iat_dt, iat_ms = _parse_time_claim(iat)
 
+        # 6. Signed validity window must be 0 < exp - iat <= 60 s (ADR-11), whoever issued the token
+        lifetime_ms = exp_ms - iat_ms
+        if lifetime_ms <= 0 or lifetime_ms > MAX_TOKEN_LIFETIME_MS:
+            raise InvalidValidityPeriod("QR_VALIDITY_PERIOD_INVALID")
+
+        # 7. Not issued in the future (beyond the known clock error bound, always < 2000 ms)
         eval_now_ms = int(eval_now.timestamp() * 1000)
-        allowed_skew_ms = min(bound_ms, 2000) if bound_ms is not None else 2000
-        if allowed_skew_ms < 0:
-            allowed_skew_ms = 0
+        if iat_ms > eval_now_ms + bound_ms:
+            raise QrTokenNotYetValid("QR_TOKEN_NOT_YET_VALID")
 
-        if eval_now_ms > exp_ms + allowed_skew_ms:
+        # 8. Expiry is strict: valid while now <= exp. The clock bound is never added to exp (team decision 08/11).
+        if eval_now_ms > exp_ms:
             raise QrTokenExpired("QR_TOKEN_EXPIRED")
-
-        # Parse iat
-        if isinstance(iat, (int, float)):
-            iat_dt = (
-                datetime.fromtimestamp(iat / 1000.0, tz=UTC)
-                if iat > 10_000_000_000
-                else datetime.fromtimestamp(iat, tz=UTC)
-            )
-        elif isinstance(iat, str):
-            iat_dt = datetime.fromisoformat(iat.replace("Z", "+00:00"))
-            if iat_dt.tzinfo is None:
-                iat_dt = iat_dt.replace(tzinfo=UTC)
-        else:
-            raise MalformedQrToken("MALFORMED_QR_TOKEN")
 
         return TokenClaims(
             tokenId=str(jti),
