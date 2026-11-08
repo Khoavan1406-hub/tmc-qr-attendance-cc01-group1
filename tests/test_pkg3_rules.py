@@ -165,7 +165,7 @@ def test_late_passage_after_no_passage_is_stored_for_review_without_auto_attenda
     processor, facade, scan_repo, att_repo, turnstile, obs = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     cycle = scan_repo.get_cycle_by_command(res.commandId)
-    assert processor.handlePassageTimeout(cycle.cycleId) is True
+    assert processor.handlePassageTimeout(cycle.cycleId, now=cycle.observationDeadline + timedelta(milliseconds=1)) is True
     close_before = len(turnstile.close_calls)
 
     processor.onPassage("pas-late", res.commandId, LANE)

@@ -15,7 +15,7 @@ src/tmc_gate/
 ├── ports/           # Hợp đồng giao tiếp (Interfaces/Ports) chuẩn ISP & DIP (§7.1.4, §7.1.5). Chỉ import domain/.
 │   ├── inbound.py   # GateCoreApi tách thành: IScanSubmission, IInterventionRequest, IFactoryUpdates
 │   ├── turnstile.py # ITurnstileControl tách thành: IOpenGate, ICloseGate, IEmergencyGate, IPassageEvents
-│   └── repositories.py # IScanRepository, IAttendanceRepository, IOutboxRepository, ISnapshotRepository, IAuditApi...
+│   └── repositories.py # IScanRepository, IPassageWindowQuery, IAttendanceRepository, IOutboxRepository, ISnapshotRepository, IAuditApi...
 ├── application/     # Tầng nghiệp vụ của M1 Gate Core & M3 Gate Intervention (§4.1.6). Chỉ import domain/ và ports/.
 │   ├── access_decision.py # AccessDecision (SRP: chỉ đánh giá QR Ed25519 + EligibilitySnapshot, không gọi cửa xoay)
 │   ├── processor.py       # GateTransactionProcessor (SRP: điều phối Flow A & Flow B, giữ trạng thái cổng)
