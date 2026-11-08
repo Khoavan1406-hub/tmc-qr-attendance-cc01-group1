@@ -183,7 +183,7 @@ Flow B & An emergency wins over an open result that arrives after it: a late OPE
 \hline
 Table 4.23b & With no PASSAGE within 15 seconds, the worker moves the cycle to NO\_PASSAGE and the scan to PENDING\_RECONCILIATION, also after LANE\_CLEAR has closed the lane; a PASSAGE committed before the timer wins. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
 \hline
-Section 5.7.2, ADR-05 & Applied access rights survive a restart, a replayed update stays applied, a rolled-back snapshot write is never visible, and a scan does not wait for another request's transaction to read the snapshot. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \tofill{+ snapshot isolation test} \\
+Section 5.7.2, ADR-05 & Applied access rights survive a restart, a replayed update stays applied, a rolled-back snapshot write is never visible, and a scan does not wait for another request's transaction to read the snapshot. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py} \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.5}Design Rules and Their Tests}
@@ -223,7 +223,7 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_e2e_sqlite_flows.py} & Flow A (7 tests) and Flow B (3 tests) through \code{create_app()} & 10 & SQLite file, Ed25519, simulated controller \\
 \hline
-\code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} & Emergency priority, 15-second timeout worker, snapshot after restart & \tofill{n} & SQLite file through \code{create_app()} \\
+\code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py} & Emergency priority, 15-second timeout worker, snapshot after restart, snapshot cache isolation & \tofill{n} & SQLite file through \code{create_app()} \\
 \hline
 \multicolumn{2}{|l|}{\textbf{Total} (commit \tofill{hash}, Python 3.12)} & \textbf{\tofill{n}} & 0 skipped, 1 expected failure \\
 \hline
