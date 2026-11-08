@@ -179,3 +179,16 @@ def test_rolled_back_snapshot_write_is_not_visible(make_app):
         repo.save_snapshot(replace(before, snapshotVersion=99))
         uow.rollback()
     assert repo.get_snapshot().snapshotVersion == before.snapshotVersion
+
+
+def test_status_read_after_deadline_never_reports_opened(make_app):
+    app = make_app()  # worker thread disabled: the read itself must apply the timeout
+    app.state.processor.PASSAGE_OBSERVATION_WINDOW_MS = 100
+    with TestClient(app) as client:
+        opened = client.post("/api/gate/scans", json={"scanId": "scan-read", "qrToken": _token(app), "laneId": LANE}).json()
+        assert opened["state"] == "OPENED"
+        time.sleep(0.2)
+        status = client.get("/api/gate/scans/scan-read").json()
+    assert (status["state"], status["reason"]) == ("PENDING_RECONCILIATION", "MISSING_PASSAGE_AFTER_15S")
+    assert app.state.scan_repo.get_cycle_by_command(opened["commandId"]).passageStatus == PassageStatus.NO_PASSAGE
+    assert [c["action"] for c in app.state.controller_client.sent_commands()] == ["OPEN"]

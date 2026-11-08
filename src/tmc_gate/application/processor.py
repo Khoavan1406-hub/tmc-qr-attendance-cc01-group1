@@ -620,10 +620,23 @@ class GateTransactionProcessor(IPassageEvents):
         return applies, current_scan
 
     def getScanStatus(self, scanId: str) -> ScanResult | None:
-        """Return stored scan status for kiosk retry inquiries without downgrading OPENED (Table 4.19)."""
+        """Return stored scan status for kiosk retry inquiries without downgrading OPENED (Table 4.19).
+
+        If the 15-second window of an OPENED scan has already passed, the timeout is applied first, so a read
+        never reports OPENED after the deadline even when the worker has not swept the lane yet.
+        """
         scan = self._scan_repo.get_scan(scanId)
         if scan is None:
             return None
+        if scan.state == ScanState.OPENED:
+            cycle = self._scan_repo.get_active_cycle_for_lane(scan.laneId)
+            if (
+                cycle is not None
+                and cycle.scanId == scanId
+                and cycle.passageStatus == PassageStatus.WAITING
+                and self.handlePassageTimeout(cycle.cycleId)
+            ):
+                scan = self._scan_repo.get_scan(scanId) or scan
         return ScanResult(
             scanId=scan.scanId,
             state=scan.state,

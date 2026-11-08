@@ -44,7 +44,7 @@ def create_app(
     factory_id: str = "BD",
     demo_mode: bool = True,
     guard_identity: IGuardIdentityApi | None = None,
-    passage_timeout_interval_sec: float | None = 1.0,
+    passage_timeout_interval_sec: float | None = 0.25,
 ) -> FastAPI:
     """Wire ports and adapters using Constructor Dependency Injection (DIP) and return the FastAPI app.
 
@@ -161,7 +161,7 @@ def create_app(
     passage_timeout_worker = PassageTimeoutWorker(
         sweep=processor.sweepPassageTimeouts,
         lane_ids=[lane.laneId for lane in lanes],
-        interval_sec=passage_timeout_interval_sec or 1.0,
+        interval_sec=passage_timeout_interval_sec or 0.25,
         health_api=health_stub,
     )
 
