@@ -244,7 +244,19 @@ class GateTransactionProcessor(IPassageEvents):
             issuedAt=current_time,
         )
 
-        self._uow.begin(timeout_ms=remaining_ms)
+        try:
+            # Storage busy (another writer holds the database past the remaining budget) or unavailable:
+            # nothing is claimed and no command is sent. No rollback here: this request never began a transaction.
+            self._uow.begin(timeout_ms=remaining_ms)
+        except Exception:
+            self._health_api.report_event_async({"alert": "STORAGE_BUSY_OR_UNAVAILABLE", "scanId": scanId, "laneId": laneId})
+            return ScanResult(
+                scanId=scanId,
+                state=ScanState.CANNOT_PROCESS,
+                laneId=laneId,
+                degradedFlag=degraded,
+                reason="CANNOT_STORE_ACCEPTED_STATE",
+            )
         try:
             committed, status_reason = self._scan_repo.atomic_reserve_lane_claim_token_and_accept(
                 scan=accepted_attempt,

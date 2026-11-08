@@ -89,12 +89,14 @@ def create_app(
     )
 
     # Persistence & Cross-cutting Adapters
-    scan_repo = SqliteScanRepository(conn)
+    # All repositories share the UnitOfWork lock: the connection is shared, so a request on another thread must not
+    # read rows staged by a transaction that has not committed yet (it waits until commit or rollback).
+    scan_repo = SqliteScanRepository(conn, lock=uow.lock)
     scan_repo.seed_lane(Lane(laneId="LANE-BD-01", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.ENTRY))
     scan_repo.seed_lane(Lane(laneId="LANE-BD-02", stationId="ST-BD-01", factoryId=factory_id, direction=Direction.EXIT))
 
-    attendance_repo = SqliteAttendanceRepository(conn)
-    outbox_repo = SqliteOutboxRepository(conn)
+    attendance_repo = SqliteAttendanceRepository(conn, lock=uow.lock)
+    outbox_repo = SqliteOutboxRepository(conn, lock=uow.lock)
     snapshot_repo = SqliteSnapshotRepository(initial_snapshot)
 
     audit_stub = InMemoryAuditStub()

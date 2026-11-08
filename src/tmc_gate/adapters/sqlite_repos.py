@@ -278,8 +278,13 @@ class SqliteUnitOfWork(IUnitOfWork):
                 self._lock.release()
             raise
 
+    def _owned_by_caller(self) -> bool:
+        return self._in_tx and self._owner_thread == threading.get_ident()
+
     def commit(self) -> None:
         """Commit staged writes; a failed commit rolls back before releasing the lock."""
+        if not self._owned_by_caller():
+            raise RuntimeError("commit() called without a transaction begun by this thread")
         try:
             self._conn.commit()
         finally:
@@ -290,7 +295,14 @@ class SqliteUnitOfWork(IUnitOfWork):
                 self._finish()
 
     def rollback(self) -> None:
-        """Discard staged writes and release the lock, including after SQLite aborts."""
+        """Discard staged writes and release the lock, including after SQLite aborts.
+
+        Only the thread that began the transaction may roll it back. On the shared connection a rollback from any
+        other thread (for example after its own begin() failed) would discard another request's writes, so it is a
+        no-op.
+        """
+        if not self._owned_by_caller():
+            return
         try:
             self._conn.rollback()
         finally:
