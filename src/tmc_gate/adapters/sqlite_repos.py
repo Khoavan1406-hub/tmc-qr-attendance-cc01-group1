@@ -16,6 +16,7 @@ import threading
 import time
 import uuid
 from collections.abc import Callable
+from copy import deepcopy
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import TracebackType
@@ -827,7 +828,7 @@ class SqliteSnapshotRepository(ISnapshotRepository):
         self._uow = uow
         self._lock = lock or threading.RLock()
         self._factory_id = initial_snapshot.factoryId
-        self._committed = initial_snapshot
+        self._committed = deepcopy(initial_snapshot)
         if conn is not None:
             with self._lock:
                 conn.execute(
@@ -846,15 +847,15 @@ class SqliteSnapshotRepository(ISnapshotRepository):
                 self._committed = _snapshot_from_json(row["snapshot_json"])
 
     def get_snapshot(self) -> EligibilitySnapshot:
-        # A fresh copy each time: callers may adjust fields of the object they receive.
-        snapshot = self._committed
-        return replace(snapshot, employees={k: replace(v) for k, v in snapshot.employees.items()})
+        # A deep copy each time: callers may change any collection of the object they receive (rights, lanes,
+        # keys) without touching the committed snapshot; only save_snapshot + commit can change that.
+        return deepcopy(self._committed)
 
     def save_snapshot(self, snapshot: EligibilitySnapshot) -> None:
         """Stage the snapshot in the current UnitOfWork; it becomes the active snapshot when that commits."""
         with self._lock:
             if self._conn is None:
-                self._committed = snapshot
+                self._committed = deepcopy(snapshot)
                 return
             _require_transaction(self._conn)
             self._conn.execute(
@@ -876,7 +877,7 @@ class SqliteSnapshotRepository(ISnapshotRepository):
             current = self._committed
             if public_key_pem in current.verificationKeys:
                 return
-            updated = replace(current, verificationKeys=(*current.verificationKeys, public_key_pem))
+            updated = deepcopy(replace(current, verificationKeys=(*current.verificationKeys, public_key_pem)))
             if self._conn is not None:
                 self._conn.execute(
                     "UPDATE eligibility_snapshots SET snapshot_json = ?, updated_at = ? WHERE factory_id = ?",
