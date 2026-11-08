@@ -115,19 +115,24 @@ def test_scenario_2_valid_qr_accepted_under_degraded_mode() -> None:
     assert result.claims.factoryId == "BD"
 
 
-def test_scenario_3_expiration_boundaries_exactly_60s_pass_and_over_60s_fail() -> None:
-    """Scenario 3: Expiration boundaries: Exactly 60s (Pass) and > 60s (Fail)."""
+def test_scenario_3_expiration_boundaries_before_60s_pass_and_at_60s_fail() -> None:
+    """Scenario 3: Expiration boundaries: 1 ms before exp (Pass), exactly at exp = iat + 60 s (Fail)."""
     qr_issuer, _, _, decision = _build_test_setup(watermark_age_sec=10.0, clock_error_bound_sec=0.5)
 
     token, _ = qr_issuer.issue_qr_token(employee_id="EMP-001", factory_id="BD", issued_at=NOW, lifetime_sec=60)
 
-    # Boundary 1: At exactly 60s elapsed -> Pass
-    now_60 = NOW + timedelta(seconds=60)
-    result_60 = decision.evaluate(qrToken=token, laneId="LANE-BD-01", now=now_60)
-    assert result_60.allowed is True
-    assert result_60.reason == "ALLOWED"
+    # Boundary 1: 1 ms before exp -> Pass
+    just_before = NOW + timedelta(seconds=60) - timedelta(milliseconds=1)
+    result_before = decision.evaluate(qrToken=token, laneId="LANE-BD-01", now=just_before)
+    assert result_before.allowed is True
+    assert result_before.reason == "ALLOWED"
 
-    # Boundary 2: At > 60s past expiry and clock skew tolerance (e.g. 65s) -> Fail
+    # Boundary 2: exactly at exp (60 s after iat) -> Fail; the token expires at exp
+    result_60 = decision.evaluate(qrToken=token, laneId="LANE-BD-01", now=NOW + timedelta(seconds=60))
+    assert result_60.allowed is False
+    assert result_60.reason == "QR_TOKEN_EXPIRED"
+
+    # Boundary 3: At > 60s past expiry and clock skew tolerance (e.g. 65s) -> Fail
     now_expired = NOW + timedelta(seconds=65)
     result_expired = decision.evaluate(qrToken=token, laneId="LANE-BD-01", now=now_expired)
     assert result_expired.allowed is False

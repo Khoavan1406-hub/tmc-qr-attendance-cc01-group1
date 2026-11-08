@@ -230,7 +230,7 @@ class AccessDecision:
         clock_error_bound_ms: int | None = None,
     ) -> TokenClaims:
         """Verify Ed25519 signature against `snapshot.verificationKeys`, signed window 0 < exp - iat <= 60 s, iat not in the future
-        (beyond the clock bound), strict expiry now <= exp,
+        (beyond the clock bound), and expiry at exp (valid while now < exp; rejected from now == exp),
         and factory binding (§7.3.1, ADR-11).
         """
         # Resolve parameters flexibly
@@ -340,8 +340,9 @@ class AccessDecision:
         if iat_ms > eval_now_ms + bound_ms:
             raise QrTokenNotYetValid("QR_TOKEN_NOT_YET_VALID")
 
-        # 8. Expiry is strict: valid while now <= exp. The clock bound is never added to exp (team decision 08/11).
-        if eval_now_ms > exp_ms:
+        # 8. The token expires at exp: valid while now < exp, rejected from now == exp. The clock bound is never
+        #    added to exp (team decision 08/11).
+        if eval_now_ms >= exp_ms:
             raise QrTokenExpired("QR_TOKEN_EXPIRED")
 
         return TokenClaims(

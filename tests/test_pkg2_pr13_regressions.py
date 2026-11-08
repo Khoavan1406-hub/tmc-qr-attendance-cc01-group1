@@ -2,7 +2,8 @@
 
 1. A clock error bound of 0 must never be widened to 2000 ms.
 2. The factory enforces the signed validity window itself: 0 < exp - iat <= 60 s, iat not in the future.
-3. Expiry is strict (now <= exp); the clock bound is not added to exp (team decision 08/11).
+3. The token expires at exp: valid while now < exp, rejected from now == exp; the clock bound is not added
+   to exp (team decision 08/11).
 """
 
 from datetime import UTC, datetime, timedelta
@@ -51,9 +52,9 @@ def test_zero_clock_bound_does_not_extend_expiry(expired_ms: int) -> None:
 def test_expiry_is_strict_for_every_clock_bound(bound: float) -> None:
     issuer, decision = qr_setup(bound)
     token = _token(issuer, NOW - timedelta(seconds=60))
-    assert decision.evaluate(token, LANE, now=NOW).allowed is True  # exactly at exp
-    late = decision.evaluate(token, LANE, now=NOW + timedelta(milliseconds=1))
-    assert late.allowed is False and late.reason == "QR_TOKEN_EXPIRED"
+    assert decision.evaluate(token, LANE, now=NOW - timedelta(milliseconds=1)).allowed is True  # 1 ms before exp
+    at_exp = decision.evaluate(token, LANE, now=NOW)  # the token expires exactly at exp
+    assert at_exp.allowed is False and at_exp.reason == "QR_TOKEN_EXPIRED"
 
 
 @pytest.mark.parametrize(
