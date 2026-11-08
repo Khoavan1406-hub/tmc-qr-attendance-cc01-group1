@@ -2,7 +2,8 @@
 
 1. create_app() shares one SQLite connection, so every repository must share the UnitOfWork lock:
    a request on another thread must never read rows staged by a transaction that later rolls back.
-2. A database held by another writer past the remaining budget yields CANNOT_PROCESS (HTTP 200), not HTTP 500;
+2. A database held by another writer past the remaining budget yields CANNOT_PROCESS (HTTP 200), not HTTP 500,
+   on every storage step of processScan (duplicate read, REJECTED / replay audit, A4 claim);
    no token is claimed, no command is sent, and no other request's transaction is rolled back.
 
 The QR check is replaced by an allow-all AccessDecision so this file does not depend on Package 2.
@@ -120,3 +121,93 @@ def test_app_does_not_expose_another_threads_uncommitted_writes(real_app, read_k
         observer.close()
         if state.uow.connection.in_transaction:
             state.uow.rollback()
+
+
+# --- Review round 2 (08/11): every storage wait in processScan is bounded and never ends in HTTP 500 ---
+
+
+class _RejectAll(_AllowAll):
+    def evaluate(self, qrToken: str, laneId: str, now: datetime | None = None) -> DecisionResult:
+        return DecisionResult(allowed=False, operatingMode=OperatingMode.NORMAL, snapshotVersion=1,
+                              reason="INVALID_QR_SIGNATURE")
+
+
+def test_rejected_scan_handles_storage_busy_without_http_500(real_app) -> None:
+    app, path = real_app
+    app.state.processor._access_decision = _RejectAll()
+    blocker = create_sqlite_connection(str(path))
+    blocker.execute("BEGIN IMMEDIATE")
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            response = client.post("/api/gate/scans", json={"scanId": "rej-busy", "qrToken": "BAD", "laneId": LANE})
+        assert response.status_code == 200, (response.status_code, response.text)
+        assert response.json()["state"] == "CANNOT_PROCESS"
+        assert not app.state.controller_client.sent_commands()
+        assert not app.state.uow.connection.in_transaction
+        assert blocker.in_transaction
+    finally:
+        blocker.rollback()
+        blocker.close()
+
+
+def test_rejected_scan_is_stored_once_storage_is_free(real_app) -> None:
+    app, _ = real_app
+    app.state.processor._access_decision = _RejectAll()
+    response = TestClient(app).post("/api/gate/scans", json={"scanId": "rej-ok", "qrToken": "BAD", "laneId": LANE})
+    assert response.json()["state"] == "REJECTED"
+    assert app.state.scan_repo.get_scan("rej-ok").state == ScanState.REJECTED
+
+
+def test_replay_audit_handles_storage_busy_without_http_500(real_app, monkeypatch) -> None:
+    app, path = real_app
+    blocker = create_sqlite_connection(str(path))
+    uow = app.state.uow
+    original_rollback = uow.rollback
+    competing_writer_started = Event()
+
+    def rollback_then_other_writer():
+        original_rollback()
+        if not competing_writer_started.is_set():
+            blocker.execute("BEGIN IMMEDIATE")
+            competing_writer_started.set()
+
+    try:
+        with TestClient(app, raise_server_exceptions=False) as client:
+            first = client.post("/api/gate/scans", json={"scanId": "original", "qrToken": "QR-R", "laneId": LANE})
+            assert first.json()["state"] == "OPENED"
+            # Another connection takes the write lock between replay detection (A4 rollback) and the replay audit
+            monkeypatch.setattr(uow, "rollback", rollback_then_other_writer)
+            replay = client.post("/api/gate/scans", json={"scanId": "replay", "qrToken": "QR-R", "laneId": "LANE-BD-02"})
+        assert competing_writer_started.is_set()
+        assert replay.status_code == 200, (replay.status_code, replay.text)
+        assert replay.json()["state"] == "CANNOT_PROCESS"
+        assert len(app.state.controller_client.sent_commands()) == 1
+        assert not uow.connection.in_transaction
+    finally:
+        monkeypatch.setattr(uow, "rollback", original_rollback)
+        blocker.rollback()
+        blocker.close()
+
+
+def test_initial_scan_read_obeys_deadline_while_another_transaction_holds_lock(real_app) -> None:
+    app, _ = real_app
+    uow = app.state.uow
+    started = Event()
+    uow.begin()  # another request's transaction on this process
+
+    def scan_with_short_deadline():
+        now = datetime.now(UTC)
+        started.set()
+        return app.state.processor.processScan("wait-read", "QR-D", LANE, now=now, deadline=now + timedelta(milliseconds=100))
+
+    try:
+        with ThreadPoolExecutor(max_workers=1) as pool:
+            future = pool.submit(scan_with_short_deadline)
+            assert started.wait(2)
+            result = future.result(timeout=0.5)  # five times the 100 ms budget
+    finally:
+        uow.rollback()
+    assert result.state == ScanState.CANNOT_PROCESS
+    assert not app.state.controller_client.sent_commands()
+    # The other request's transaction was not rolled back by the waiting scan
+    assert uow.connection.execute("SELECT COUNT(*) FROM token_reservations").fetchone()[0] == 0
