@@ -280,3 +280,94 @@ def test_id_list_stored_as_string_is_refused(db):
     _tamper_snapshot(db, mutate)
     with pytest.raises(ValueError):
         create_app(db_path=db, passage_timeout_interval_sec=None)
+
+
+# --- PR #16 review: databases written before emergency_support_case_id existed -----------------------------
+
+def _make_pre_column_db(db):
+    """Lane 1: emergency A then B. Lane 2: assisted open then emergency C. Then drop the new column, as in
+    a database created by dev 52bf3aa."""
+    app = create_app(db_path=db, passage_timeout_interval_sec=None)
+    processor = app.state.processor
+    release(app, "emg-A")
+    release(app, "emg-B")
+    with app.state.uow:
+        app.state.scan_repo.save_support_case(SupportCase(
+            supportCaseId="case-ast", factoryId="BD", laneId="LANE-BD-02", guardId="GUARD-BD-01",
+            reason="battery", occurredAt=datetime.now(UTC), employeeId="EMP-001",
+        ))
+        app.state.uow.commit()
+    assert processor.requestAssistedOpen("case-ast", "LANE-BD-02").state == ScanState.OPENED
+    assert processor.requestEmergencyRelease("emg-C", "LANE-BD-02").reason == ClosureStatus.EMERGENCY_HOLD.value
+    conn = app.state.uow.connection
+    conn.execute("ALTER TABLE gate_cycles DROP COLUMN emergency_support_case_id")
+    conn.commit()
+    conn.close()
+
+
+@pytest.fixture
+def upgraded(db):
+    _make_pre_column_db(db)
+    app = create_app(db_path=db, passage_timeout_interval_sec=None)
+    yield app
+    app.state.uow.connection.close()
+
+
+def test_upgrade_reset_of_older_emergency_is_still_superseded(upgraded):
+    result = upgraded.state.processor.requestEmergencyReset("emg-A", LANE)
+    assert result.reason == "EMERGENCY_SUPERSEDED"
+    assert actions(upgraded, ACTION_RESET) == []
+    assert hold(upgraded) == ClosureStatus.EMERGENCY_HOLD
+
+
+def test_upgrade_reset_of_latest_emergency_is_accepted(upgraded):
+    assert upgraded.state.processor.requestEmergencyReset("emg-A", LANE).reason == "EMERGENCY_SUPERSEDED"
+    assert upgraded.state.processor.requestEmergencyReset("emg-B", LANE).reason == "EMERGENCY_RESET_CONFIRMED"
+    assert hold(upgraded) == ClosureStatus.OPENED
+
+
+def test_upgrade_emergency_after_assisted_open_is_owned_by_the_emergency(upgraded):
+    processor = upgraded.state.processor
+    assert processor.requestEmergencyReset("case-ast", "LANE-BD-02").reason == "EMERGENCY_SUPERSEDED"
+    assert processor.requestEmergencyReset("emg-C", "LANE-BD-02").reason == "EMERGENCY_RESET_CONFIRMED"
+
+
+# --- PR #16 review: a right whose employeeId differs from its key stays denied after storage ---------------
+
+def test_mismatched_employee_id_is_stored_as_given_and_stays_denied(db):
+    from dataclasses import replace
+
+    app = create_app(db_path=db, passage_timeout_interval_sec=None)
+    current = app.state.snapshot_repo.get_snapshot()
+    rights = dict(current.employees)
+    rights["EMP-001"] = replace(rights["EMP-001"], employeeId="EMP-002")
+    assert app.state.gate_core_facade.applyEligibilityChanges(
+        replace(current, snapshotVersion=current.snapshotVersion + 1, employees=rights), eventId="elig-mismatch"
+    )
+    qr = app.state.qr_issuer.issue_qr_token(employee_id="EMP-001", factory_id="BD")[0]
+    before = app.state.processor.processScan("scan-mismatch-1", qr, LANE)
+    assert (before.state, before.reason) == (ScanState.REJECTED, "EMPLOYEE_NOT_FOUND")
+    app.state.uow.connection.close()
+
+    restarted = create_app(db_path=db, passage_timeout_interval_sec=None)
+    assert restarted.state.snapshot_repo.get_snapshot().employees["EMP-001"].employeeId == "EMP-002"
+    qr = restarted.state.qr_issuer.issue_qr_token(employee_id="EMP-001", factory_id="BD")[0]
+    after = restarted.state.processor.processScan("scan-mismatch-2", qr, LANE)
+    assert (after.state, after.reason) == (ScanState.REJECTED, "EMPLOYEE_NOT_FOUND")
+    restarted.state.uow.connection.close()
+
+
+def test_snapshot_that_storage_would_change_is_refused(db):
+    from dataclasses import replace
+
+    app = create_app(db_path=db, passage_timeout_interval_sec=None)
+    current = app.state.snapshot_repo.get_snapshot()
+    rights = dict(current.employees)
+    rights["EMP-001"] = replace(rights["EMP-001"], allowedLanes=[LANE])  # a list would come back as a set
+    with pytest.raises(ValueError):
+        app.state.gate_core_facade.applyEligibilityChanges(
+            replace(current, snapshotVersion=current.snapshotVersion + 1, employees=rights), eventId="elig-list"
+        )
+    assert not app.state.uow.connection.in_transaction
+    assert app.state.snapshot_repo.get_snapshot().snapshotVersion == current.snapshotVersion
+    app.state.uow.connection.close()

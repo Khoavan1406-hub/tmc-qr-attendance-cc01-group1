@@ -193,6 +193,17 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
         ):
             if column not in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}:
                 conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Cycles stored before emergency_support_case_id existed: the emergency that holds the lane is the
+        # LATEST emergencyRelease command of that cycle, not the cycle's first support case.
+        conn.execute(
+            """UPDATE gate_cycles SET emergency_support_case_id = (
+                   SELECT c.support_case_id FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE'
+                   ORDER BY c.rowid DESC LIMIT 1)
+               WHERE emergency_support_case_id IS NULL AND EXISTS (
+                   SELECT 1 FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE')"""
+        )
         token_pk = {row["name"] for row in conn.execute("PRAGMA table_info(token_reservations)") if row["pk"]}
         if token_pk == {"token_id"}:
             conn.execute("ALTER TABLE token_reservations RENAME TO token_reservations_legacy")
@@ -775,6 +786,7 @@ def _snapshot_to_json(snapshot: EligibilitySnapshot) -> str:
             "verificationKeys": [key.decode("ascii") for key in snapshot.verificationKeys],
             "employees": {
                 employee_id: {
+                    "employeeId": right.employeeId,
                     "active": right.active,
                     "allowedFactories": sorted(right.allowedFactories),
                     "allowedLanes": sorted(right.allowedLanes),
@@ -792,6 +804,23 @@ def _string_set(value: object) -> set[str]:
     if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
         raise ValueError("stored snapshot has an invalid id list")
     return set(value)
+
+
+def _same_snapshot(stored: EligibilitySnapshot, given: EligibilitySnapshot) -> bool:
+    """Field-by-field equality, with exact types for the flags and numbers the domain checks by type."""
+    keys = ("factoryId", "snapshotVersion", "confirmedWatermark", "clockErrorBoundSec", "isCompleteAndContinuous",
+            "verificationKeys", "employees", "lanes")
+    if any(getattr(stored, key) != getattr(given, key) for key in keys):
+        return False
+    for key in ("snapshotVersion", "clockErrorBoundSec", "isCompleteAndContinuous"):
+        if type(getattr(stored, key)) is not type(getattr(given, key)):
+            return False
+    return all(
+        type(stored.employees[eid].active) is type(right.active)
+        and type(right.allowedFactories) is set
+        and type(right.allowedLanes) is set
+        for eid, right in given.employees.items()
+    )
 
 
 def _snapshot_from_json(text: str) -> EligibilitySnapshot:
@@ -812,7 +841,9 @@ def _snapshot_from_json(text: str) -> EligibilitySnapshot:
         verificationKeys=tuple(key.encode("ascii") for key in data["verificationKeys"]),
         employees={
             employee_id: EmployeeRight(
-                employeeId=employee_id,
+                # stored as given: a right whose own id differs from its key stays EMPLOYEE_NOT_FOUND
+                # (rows written before this field existed fall back to the key)
+                employeeId=right.get("employeeId", employee_id),
                 active=right["active"],
                 allowedFactories=_string_set(right["allowedFactories"]),
                 allowedLanes=_string_set(right["allowedLanes"]),
@@ -887,6 +918,10 @@ class SqliteSnapshotRepository(ISnapshotRepository):
                 (snapshot.factoryId, snapshot.snapshotVersion, _snapshot_to_json(snapshot), datetime.now(UTC).isoformat()),
             )
             staged = _snapshot_from_json(_snapshot_to_json(snapshot))
+            if not _same_snapshot(staged, snapshot):
+                # The stored copy must decide exactly like the snapshot that was applied; anything lost or
+                # changed by storage (a type, an id) is refused and the UnitOfWork rolls back the update.
+                raise ValueError("eligibility snapshot cannot be stored without changing it")
             self._uow.after_commit(lambda: self._publish(staged))
 
     def _publish(self, snapshot: EligibilitySnapshot) -> None:

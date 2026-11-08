@@ -1233,8 +1233,8 @@ class GateTransactionProcessor(IPassageEvents):
         """True while this cycle is in EMERGENCY_HOLD for exactly this emergency (the latest release)."""
         if cycle is None or cycle.closureStatus != ClosureStatus.EMERGENCY_HOLD:
             return False
-        owner = cycle.emergencySupportCaseId or cycle.supportCaseId  # rows stored before the column existed
-        return owner == supportCaseId
+        # Older SQLite rows get this owner from their latest EMERGENCY_RELEASE command at startup (migration)
+        return cycle.emergencySupportCaseId == supportCaseId
 
     def requestEmergencyReset(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
         """Request reset after emergency release; exits EMERGENCY_HOLD ONLY when RESET_CONFIRMED.
