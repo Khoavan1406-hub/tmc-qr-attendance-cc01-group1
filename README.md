@@ -39,6 +39,7 @@ Nhằm bám sát yêu cầu đề bài **Assignment M2** và các quyết địn
    * Mở cổng hỗ trợ (Assisted Open) khi công nhân gặp sự cố (quên/hỏng điện thoại): Ghi nhận `SupportCase`, **tuyệt đối không tạo bản ghi chấm công tự động** (tuân thủ nguyên tắc I-04, ADR-07).
    * Mở khẩn cấp (Emergency Release): Đưa làn vào trạng thái `EMERGENCY_HOLD`, khóa mọi lượt quét QR mới tại Kiosk.
    * Reset khẩn cấp: Chỉ cho phép thoát `EMERGENCY_HOLD` khi controller phản hồi xác nhận `RESET_CONFIRMED`.
+   * Reset phải dùng đúng `supportCaseId` của lần mở khẩn cấp đang giữ làn; reset của sự cố cũ không xoá sự cố mới (`EMERGENCY_SUPERSEDED`). Lệnh `RESET` được lưu trước khi gửi; gọi lại reset khi kết quả chưa rõ chỉ hỏi controller về lệnh cũ (`queryStatus`), không gửi lệnh mới. Chỉ khi controller xác nhận không thực hiện (`CONTROLLER_ERROR`) mới gửi một lệnh reset mới.
 
 ### B. Ngoài phạm vi triển khai / Giả lập phục vụ Demo (Out-of-Scope / Simulated)
 * **Xác thực chấm công của HR:** Việc phê duyệt của HR đối với các trường hợp mở hỗ trợ và luồng giải quyết sai lệch (Resolution Feed) tại trung tâm là giả lập (**Flow B không gọi là E2E**).
