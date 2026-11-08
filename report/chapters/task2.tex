@@ -175,15 +175,15 @@ I-10, Section 5.7.2 & NORMAL up to 60 s, DEGRADED below 30 min, CANNOT\_PROCESS 
 \hline
 ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use claim of tokenId. & \code{test_pkg2_*.py}; two connections claiming one token: \code{test_pkg4_sqlite_repos.py}; copied QR on another lane: \code{test_e2e_sqlite_flows.py} \\
 \hline
-Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one command per supportCaseId; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py} \\*
+Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one openGate per supportCaseId, also for two requests at the same time; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py}, \code{test_final_code_edges_regressions.py} \\*
 \hline\noalign{\nobreak}
-Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED ends the hold. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py} \\
+Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED for the emergency that holds the lane now ends the hold, so a late reset result for an older emergency returns EMERGENCY\_SUPERSEDED. The RESET command is stored before it is sent and is not resent; a repeated request only queries it. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py}, \code{test_final_code_edges_regressions.py} \\
 \hline
 Flow B & An emergency wins over an open result that arrives after it: a late OPEN\_CONFIRMED creates no attendance, and a late CONTROLLER\_ERROR does not release the held lane. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
 \hline
 Table 4.23b & With no PASSAGE within 15 seconds, the worker moves the cycle to NO\_PASSAGE and the scan to PENDING\_RECONCILIATION, also after LANE\_CLEAR has closed the lane; a PASSAGE committed before the timer wins. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
 \hline
-Section 5.7.2, ADR-05 & Applied access rights survive a restart, a replayed update stays applied, a rolled-back snapshot write is never visible, and a scan does not wait for another request's transaction to read the snapshot. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py} \\
+Section 5.7.2, ADR-05 & Applied access rights survive a restart, a replayed update stays applied, a rolled-back snapshot write is never visible, and a scan does not wait for another request's transaction to read the snapshot. The stored snapshot is read back without type coercion, so a value such as \texttt{"false"} can never turn into an access right. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py}, \code{test_final_code_edges_regressions.py} \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.5}Design Rules and Their Tests}
@@ -225,7 +225,9 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py} & Emergency priority, 15-second timeout worker, snapshot after restart, snapshot cache isolation & 18 & SQLite file through \code{create_app()} \\
 \hline
-\multicolumn{2}{|l|}{\textbf{Total} (commit 52bf3aa, Python 3.12)} & \textbf{454} & 0 skipped, 1 expected failure \\
+\code{test_final_code_edges_regressions.py} & Reset owned by the current emergency, stored RESET never resent, one openGate per supportCaseId, snapshot read without type coercion & 19 & SQLite file through \code{create_app()} \\
+\hline
+\multicolumn{2}{|l|}{\textbf{Total} (commit 5bd6721, Python 3.12)} & \textbf{473} & 0 skipped, 1 expected failure \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.6}Test Results of the Submitted Version}

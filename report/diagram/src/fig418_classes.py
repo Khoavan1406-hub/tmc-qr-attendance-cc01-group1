@@ -1,4 +1,4 @@
-"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (updated for PR #15: IPassageWindowQuery, PassageTimeoutWorker, 08/11/2026).
+"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (updated for PR #15: IPassageWindowQuery, PassageTimeoutWorker; PR #16: GateCycle.emergencySupportCaseId, 08/11/2026).
 
 Usage: python fig418_classes.py > ../class/figure-4-18-gate-core-classes.drawio
 Panel A: application classes, ports owned by Gate Core, and the adapters that implement them.
@@ -175,8 +175,10 @@ GAP = 60
 lane = box("Lane", C1, BY + 44, CW, attrs=["laneId: str", "factoryId: str", "direction: Direction", "activeCycleId: str | None"])
 cyc = box("GateCycle", C2, BY + 44, CW, attrs=["cycleId: str", "laneId: str", "passageStatus: PassageStatus", "closureStatus: ClosureStatus",
                                                 "observationDeadline: datetime", "scanId: str | None", "supportCaseId: str | None",
-                                                "laneClearReceived: bool", "closeCommandId: str | None"],
-          ops=["is_active_or_unresolved(): bool"])
+                                                "laneClearReceived: bool", "closeCommandId: str | None",
+                                                "emergencySupportCaseId: str | None"],
+          ops=["is_active_or_unresolved(): bool"],
+          h=12 + int(NAME * 1.2) + 11 * LH + 10 + LH + 10)  # emergencySupportCaseId wraps to two lines
 sup = box("SupportCase", C3, BY + 44, CW, attrs=["supportCaseId: str", "laneId: str", "guardId: str", "isEmergency: bool"])
 R2 = BY + 230
 scan = box("ScanAttempt", C1, R2, CW, attrs=["scanId: str", "laneId: str", "state: ScanState", "tokenId: str | None",
