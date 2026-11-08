@@ -12,21 +12,34 @@ LANE = "LANE-BD-01"
 
 
 class _Clock:
-    """Fake monotonic clock in ms; each call can advance by a fixed step."""
+    """Fake monotonic clock in ms. It moves only when the test says time has passed, never per read."""
 
-    def __init__(self, step_ms: int = 0) -> None:
+    def __init__(self) -> None:
         self.value = 0
-        self.step_ms = step_ms
 
     def __call__(self) -> int:
-        current = self.value
-        self.value += self.step_ms
-        return current
+        return self.value
+
+    def advance(self, ms: int) -> None:
+        self.value += ms
 
 
-def _fixture_with_clock(step_ms: int):
+def _fixture_with_clock(accept_cost_ms: int):
+    """Processor with a fake clock; each committed ACCEPTED write (step A4) takes `accept_cost_ms` of the scan budget."""
     processor, facade, uow, scan_repo, att_repo, turnstile, outbox, obs = _build_fixture()
-    processor._monotonic_ms = _Clock(step_ms)  # noqa: SLF001 - test seam
+    clock = _Clock()
+    processor._monotonic_ms = clock  # noqa: SLF001 - test seam
+    if accept_cost_ms:
+        store_accepted = scan_repo.atomic_reserve_lane_claim_token_and_accept
+
+        def slow_store_accepted(*args, **kwargs):
+            result = store_accepted(*args, **kwargs)
+            committed, _ = result
+            if committed:  # only a successful ACCEPTED write is slow; a refused claim returns at once
+                clock.advance(accept_cost_ms)
+            return result
+
+        scan_repo.atomic_reserve_lane_claim_token_and_accept = slow_store_accepted
     return processor, facade, scan_repo, att_repo, turnstile, obs
 
 
@@ -40,21 +53,21 @@ def _open(facade, scan_id="s1", token="QR-VALID-1", deadline_ms=2_000):
 # --- openGate budget and deadline (Flow A) ---
 
 def test_open_gate_receives_700ms_when_enough_time_remains() -> None:
-    _, facade, _, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    _, facade, _, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade, deadline_ms=2_000)
     assert res.state == ScanState.OPENED
     assert turnstile.open_timeouts == [700]
 
 
 def test_open_gate_receives_remaining_time_when_below_700ms() -> None:
-    _, facade, _, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    _, facade, _, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     _open(facade, deadline_ms=300)
     assert turnstile.open_timeouts == [300]
 
 
 def test_deadline_expired_after_accepted_releases_lane_keeps_token_claimed() -> None:
-    # The clock jumps 3 s between the start of processScan and the moment before openGate
-    _, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(step_ms=3_000)
+    # Storing ACCEPTED takes 3 s, so the 2 s budget is gone before openGate
+    _, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=3_000)
     res = _open(facade, deadline_ms=2_000)
     assert res.state == ScanState.CANNOT_PROCESS
     assert res.reason == "OPEN_DEADLINE_EXPIRED_BEFORE_COMMAND"
@@ -69,7 +82,7 @@ def test_deadline_expired_after_accepted_releases_lane_keeps_token_claimed() -> 
 # --- UNDETERMINED handling ---
 
 def test_undetermined_then_query_undetermined_goes_to_pending_reconciliation() -> None:
-    _, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    _, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     turnstile.open_outcome = CommandOutcome.UNDETERMINED
     turnstile.query_outcome = CommandOutcome.UNDETERMINED
     res = _open(facade)
@@ -79,14 +92,14 @@ def test_undetermined_then_query_undetermined_goes_to_pending_reconciliation() -
 
 
 def test_undetermined_then_query_open_confirmed_becomes_opened() -> None:
-    _, facade, _, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    _, facade, _, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     turnstile.open_outcome = CommandOutcome.UNDETERMINED
     turnstile.query_outcome = CommandOutcome.OPEN_CONFIRMED
     assert _open(facade).state == ScanState.OPENED
 
 
 def test_uncertain_open_is_never_resent_for_same_scan_id() -> None:
-    _, facade, _, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    _, facade, _, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     turnstile.open_outcome = CommandOutcome.UNDETERMINED
     _open(facade)
     _open(facade)  # kiosk retries with the same scanId
@@ -94,7 +107,7 @@ def test_uncertain_open_is_never_resent_for_same_scan_id() -> None:
 
 
 def test_undetermined_without_query_port_goes_to_pending_reconciliation() -> None:
-    processor, facade, _, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, _, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     processor._status_query_port = None  # noqa: SLF001
     turnstile.open_outcome = CommandOutcome.UNDETERMINED
     assert _open(facade).state == ScanState.PENDING_RECONCILIATION
@@ -103,7 +116,7 @@ def test_undetermined_without_query_port_goes_to_pending_reconciliation() -> Non
 # --- closeGate exactly once ---
 
 def test_duplicate_lane_clear_sends_close_gate_once() -> None:
-    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     processor.onLaneClear(commandId=res.commandId, laneId=LANE)
     processor.onLaneClear(commandId=res.commandId, laneId=LANE)
@@ -111,7 +124,7 @@ def test_duplicate_lane_clear_sends_close_gate_once() -> None:
 
 
 def test_lane_clear_after_close_uncertain_queries_without_new_close() -> None:
-    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     turnstile.close_outcome = CommandOutcome.UNDETERMINED
     turnstile.query_outcome = CommandOutcome.UNDETERMINED
@@ -130,7 +143,7 @@ def test_lane_clear_after_close_uncertain_queries_without_new_close() -> None:
 # --- passage ---
 
 def test_duplicate_passage_event_id_is_ignored() -> None:
-    processor, facade, _, att_repo, _, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, _, att_repo, _, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     processor.onPassage("pas-1", res.commandId, LANE)
     processor.onPassage("pas-1", res.commandId, LANE)
@@ -138,7 +151,7 @@ def test_duplicate_passage_event_id_is_ignored() -> None:
 
 
 def test_second_distinct_passage_is_kept_but_not_counted() -> None:
-    processor, facade, _, att_repo, _, obs = _fixture_with_clock(step_ms=0)
+    processor, facade, _, att_repo, _, obs = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     processor.onPassage("pas-1", res.commandId, LANE)
     processor.onPassage("pas-2", res.commandId, LANE)
@@ -149,7 +162,7 @@ def test_second_distinct_passage_is_kept_but_not_counted() -> None:
 
 
 def test_late_passage_after_no_passage_is_stored_for_review_without_auto_attendance() -> None:
-    processor, facade, scan_repo, att_repo, turnstile, obs = _fixture_with_clock(step_ms=0)
+    processor, facade, scan_repo, att_repo, turnstile, obs = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     cycle = scan_repo.get_cycle_by_command(res.commandId)
     assert processor.handlePassageTimeout(cycle.cycleId) is True
@@ -169,7 +182,7 @@ def test_late_passage_after_no_passage_is_stored_for_review_without_auto_attenda
 
 
 def test_passage_after_emergency_reconciliation_is_kept_without_attendance() -> None:
-    processor, facade, scan_repo, att_repo, _, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, scan_repo, att_repo, _, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     facade.requestEmergencyRelease("case-emg-2", LANE)
     assert scan_repo.get_scan("s1").state == ScanState.PENDING_RECONCILIATION
@@ -181,7 +194,7 @@ def test_passage_after_emergency_reconciliation_is_kept_without_attendance() -> 
 
 
 def test_timely_passage_still_creates_one_attendance() -> None:
-    processor, facade, _, att_repo, _, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, _, att_repo, _, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     processor.onPassage("pas-ok", res.commandId, LANE)
     assert len(att_repo.list_transactions()) == 1
@@ -206,7 +219,7 @@ def test_processor_requires_unit_of_work() -> None:
 
 
 def test_emergency_release_keeps_scan_link_of_running_cycle() -> None:
-    _, facade, scan_repo, att_repo, _, _ = _fixture_with_clock(step_ms=0)
+    _, facade, scan_repo, att_repo, _, _ = _fixture_with_clock(accept_cost_ms=0)
     res = _open(facade)
     cycle_before = scan_repo.get_cycle_by_command(res.commandId)
     facade.requestEmergencyRelease("case-emg-1", LANE)
@@ -218,7 +231,7 @@ def test_emergency_release_keeps_scan_link_of_running_cycle() -> None:
 
 
 def test_assisted_open_uses_its_own_timeout_not_700ms() -> None:
-    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(step_ms=0)
+    processor, facade, scan_repo, _, turnstile, _ = _fixture_with_clock(accept_cost_ms=0)
     from tmc_gate.domain.models import SupportCase
 
     case = SupportCase(
