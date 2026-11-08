@@ -168,6 +168,7 @@ def test_expired_deadline_before_acceptance_neither_claims_nor_sends():
 
 
 def test_deadline_budget_reduces_after_time_spent_before_send():
+    # 1.7 s of the 2 s budget is spent storing ACCEPTED, so openGate gets the 300 ms left
     _, facade, _, _, turnstile, _ = _fixture_with_clock(1_700)
     assert _open(facade).state == ScanState.OPENED
     assert turnstile.open_timeouts == [300]
