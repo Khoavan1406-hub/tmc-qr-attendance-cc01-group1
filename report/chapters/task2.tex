@@ -230,7 +230,7 @@ The ten tests in \code{test_e2e_sqlite_flows.py} are the closest we get to a rea
   \item a full cycle where the controller sends every signal twice still gives one openGate, one attendance record, and one closeGate;
   \item a copied QR code scanned on another lane is rejected as a replay, and a malformed token or a suspended employee is rejected before any command;
   \item with a watermark age of 300 seconds the scan is accepted in DEGRADED mode and the attendance record carries the degraded flag, and at 1800 seconds the scan is CANNOT\_PROCESS;
-  \item an UNDETERMINED opening is queried once and then becomes PENDING\_RECONCILIATION without a second open command, and CONTROLLER\_ERROR releases the lane;
+  \item an UNDETERMINED opening is queried once and then becomes PENDING\_\allowbreak RECONCILIATION without a second open command, and CONTROLLER\_ERROR releases the lane;
   \item the stored state is still there after the application is restarted on the same file.
 \end{itemize}
 
