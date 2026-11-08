@@ -1002,24 +1002,7 @@ class GateTransactionProcessor(IPassageEvents):
         # Repeated request returns existing command status without re-sending openGate (§4.2.3 p. 66)
         existing_cmd = self._scan_repo.get_command_by_support_case(supportCaseId, CommandType.OPEN.value)
         if existing_cmd is not None:
-            if existing_cmd.outcome == CommandOutcome.UNDETERMINED:
-                existing_cmd.outcome = self._query_or_undetermined(existing_cmd.commandId, existing_cmd.laneId)
-            st = (
-                ScanState.OPENED
-                if existing_cmd.outcome == CommandOutcome.OPEN_CONFIRMED
-                else (
-                    ScanState.CONTROLLER_ERROR
-                    if existing_cmd.outcome == CommandOutcome.CONTROLLER_ERROR
-                    else ScanState.PENDING_RECONCILIATION
-                )
-            )
-            return ScanResult(
-                scanId=supportCaseId,
-                state=st,
-                laneId=existing_cmd.laneId,
-                commandId=existing_cmd.commandId,
-                reason=existing_cmd.outcome.value,
-            )
+            return self._existing_assisted_open_result(supportCaseId, existing_cmd)
 
         if self._snapshot_repo is not None and case.employeeId is not None:
             snap = self._snapshot_repo.get_snapshot()
@@ -1038,10 +1021,6 @@ class GateTransactionProcessor(IPassageEvents):
                     laneId=laneId,
                     reason=elig_reason,
                 )
-
-        active = self._scan_repo.get_active_cycle_for_lane(laneId)
-        if active is not None:
-            return ScanResult(scanId=supportCaseId, state=ScanState.LANE_BUSY, laneId=laneId, reason="LANE_BUSY")
 
         cycle_id = f"cyc-ast-{uuid.uuid4().hex[:10]}"
         cmd_id = f"cmd-ast-{uuid.uuid4().hex[:10]}"
@@ -1062,7 +1041,16 @@ class GateTransactionProcessor(IPassageEvents):
             outcome=CommandOutcome.SENT,
             issuedAt=current_time,
         )
+        # Check for an earlier command, reserve the lane and store the OPEN command in ONE transaction, so two
+        # concurrent requests for the same support case can never both send openGate (one per supportCaseId).
         with self._uow:
+            earlier = self._scan_repo.get_command_by_support_case(supportCaseId, CommandType.OPEN.value)
+            if earlier is not None:
+                self._uow.rollback()
+                return self._existing_assisted_open_result(supportCaseId, earlier)
+            if self._scan_repo.get_active_cycle_for_lane(laneId) is not None:
+                self._uow.rollback()
+                return ScanResult(scanId=supportCaseId, state=ScanState.LANE_BUSY, laneId=laneId, reason="LANE_BUSY")
             self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
             self._uow.commit()
 
@@ -1112,6 +1100,27 @@ class GateTransactionProcessor(IPassageEvents):
         )
         return ScanResult(scanId=supportCaseId, state=state, laneId=laneId, commandId=cmd_id, reason=outcome.value)
 
+    def _existing_assisted_open_result(self, supportCaseId: str, existing_cmd: GateCommand) -> ScanResult:
+        """Status of the one OPEN command already stored for this support case; never sends openGate again."""
+        if existing_cmd.outcome in (CommandOutcome.UNDETERMINED, CommandOutcome.SENT):
+            existing_cmd.outcome = self._query_or_undetermined(existing_cmd.commandId, existing_cmd.laneId)
+        st = (
+            ScanState.OPENED
+            if existing_cmd.outcome == CommandOutcome.OPEN_CONFIRMED
+            else (
+                ScanState.CONTROLLER_ERROR
+                if existing_cmd.outcome == CommandOutcome.CONTROLLER_ERROR
+                else ScanState.PENDING_RECONCILIATION
+            )
+        )
+        return ScanResult(
+            scanId=supportCaseId,
+            state=st,
+            laneId=existing_cmd.laneId,
+            commandId=existing_cmd.commandId,
+            reason=existing_cmd.outcome.value,
+        )
+
     def _assisted_cycle_still_open(self, cycleId: str) -> bool:
         """True while no emergency has superseded this assisted opening (emergency marks it NO_PASSAGE, even after reset)."""
         current = self._scan_repo.get_cycle(cycleId)
@@ -1140,6 +1149,7 @@ class GateTransactionProcessor(IPassageEvents):
                     cycle = active
                     cycle.closureStatus = ClosureStatus.EMERGENCY_HOLD
                     cycle.supportCaseId = cycle.supportCaseId or supportCaseId
+                    cycle.emergencySupportCaseId = supportCaseId  # the newest emergency owns the hold
                     if active.scanId and active.passageStatus == PassageStatus.WAITING:
                         scan = self._scan_repo.get_scan(active.scanId)
                         # OPENED, or still waiting for its openGate result: an emergency always wins, so no
@@ -1161,6 +1171,7 @@ class GateTransactionProcessor(IPassageEvents):
                         passageStatus=PassageStatus.NO_PASSAGE,
                         closureStatus=ClosureStatus.EMERGENCY_HOLD,
                         observationDeadline=current_time,
+                        emergencySupportCaseId=supportCaseId,
                     )
                 command = GateCommand(
                     commandId=cmd_id,
@@ -1215,33 +1226,117 @@ class GateTransactionProcessor(IPassageEvents):
             reason=ClosureStatus.EMERGENCY_HOLD.value,
         )
 
+    _RESET_FINAL = (CommandOutcome.RESET_CONFIRMED, CommandOutcome.CONTROLLER_ERROR)
+
+    @staticmethod
+    def _holds_emergency(cycle: GateCycle | None, supportCaseId: str) -> bool:
+        """True while this cycle is in EMERGENCY_HOLD for exactly this emergency (the latest release)."""
+        if cycle is None or cycle.closureStatus != ClosureStatus.EMERGENCY_HOLD:
+            return False
+        owner = cycle.emergencySupportCaseId or cycle.supportCaseId  # rows stored before the column existed
+        return owner == supportCaseId
+
     def requestEmergencyReset(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
-        """Request reset after emergency release; exits EMERGENCY_HOLD ONLY when RESET_CONFIRMED."""
-        active = self._scan_repo.get_active_cycle_for_lane(laneId)
-        if active is None or active.closureStatus != ClosureStatus.EMERGENCY_HOLD:
-            return ScanResult(scanId=supportCaseId, state=ScanState.REJECTED, laneId=laneId, reason="LANE_NOT_IN_EMERGENCY_HOLD")
+        """Request reset after emergency release; exits EMERGENCY_HOLD ONLY when RESET_CONFIRMED.
 
+        - The reset must belong to the emergency that currently holds the lane (same supportCaseId). A reset
+          for an older emergency never clears a newer one (EMERGENCY_SUPERSEDED).
+        - The RESET GateCommand is stored before resetEmergency is sent. A repeated request reuses that
+          command: a SENT/UNDETERMINED outcome is queried once, never sent again with a new commandId.
+          Only a controller-confirmed CONTROLLER_ERROR (not executed) allows a new reset command.
+        - The result is applied in a new transaction that re-reads the cycle.
+        """
+        current_time = now or datetime.now(UTC)
         cmd_id = f"cmd-rst-{uuid.uuid4().hex[:10]}"
-        outcome = self._emergency_gate_port.resetEmergency(commandId=cmd_id, laneId=laneId)
-        if outcome == CommandOutcome.RESET_CONFIRMED:
-            active.closureStatus = ClosureStatus.OPENED
-            # The pre-emergency close command stays in GateCommand history but no longer governs this cycle;
-            # the next LANE_CLEAR must send and confirm a new closeGate.
-            active.closeCommandId = None
-            active.laneClearReceived = False
-            with self._uow:
-                self._scan_repo.update_cycle(active, releaseLane=False)
+        with self._uow:
+            existing = self._scan_repo.get_command_by_support_case(supportCaseId, CommandType.RESET.value)
+            if existing is not None and existing.outcome != CommandOutcome.CONTROLLER_ERROR:
+                self._uow.rollback()
+            else:
+                existing = None
+                active = self._scan_repo.get_active_cycle_for_lane(laneId)
+                if active is None or active.closureStatus != ClosureStatus.EMERGENCY_HOLD:
+                    self._uow.rollback()
+                    return ScanResult(
+                        scanId=supportCaseId, state=ScanState.REJECTED, laneId=laneId, reason="LANE_NOT_IN_EMERGENCY_HOLD"
+                    )
+                if not self._holds_emergency(active, supportCaseId):
+                    self._uow.rollback()
+                    return ScanResult(
+                        scanId=supportCaseId, state=ScanState.REJECTED, laneId=laneId, reason="EMERGENCY_SUPERSEDED"
+                    )
+                self._scan_repo.save_command(
+                    GateCommand(
+                        commandId=cmd_id,
+                        cycleId=active.cycleId,
+                        laneId=laneId,
+                        supportCaseId=supportCaseId,
+                        commandType=CommandType.RESET,
+                        outcome=CommandOutcome.SENT,
+                        issuedAt=current_time,
+                    )
+                )
                 self._uow.commit()
-            return ScanResult(scanId=supportCaseId, state=ScanState.OPENED, laneId=laneId, commandId=cmd_id, reason="EMERGENCY_RESET_CONFIRMED")
 
+        if existing is not None:
+            outcome = existing.outcome
+            if outcome not in self._RESET_FINAL:
+                outcome = self._query_or_undetermined(existing.commandId, existing.laneId)
+            return self._apply_reset_outcome(supportCaseId, existing.laneId, existing.commandId, outcome)
+
+        outcome = self._emergency_gate_port.resetEmergency(commandId=cmd_id, laneId=laneId)
+        return self._apply_reset_outcome(supportCaseId, laneId, cmd_id, outcome)
+
+    def _apply_reset_outcome(
+        self, supportCaseId: str, laneId: str, commandId: str, outcome: CommandOutcome
+    ) -> ScanResult:
+        """Store the reset outcome and leave EMERGENCY_HOLD only if this emergency still holds the lane."""
+        superseded = False
+        with self._uow:
+            command = self._scan_repo.get_command(commandId)
+            if command is not None:
+                if command.outcome in self._RESET_FINAL:
+                    outcome = command.outcome  # a final result is never downgraded
+                elif outcome != CommandOutcome.SENT:
+                    command.outcome = outcome
+                    self._scan_repo.save_command(command)
+            if outcome == CommandOutcome.RESET_CONFIRMED:
+                cycle = self._scan_repo.get_cycle(command.cycleId) if command is not None else None
+                if self._holds_emergency(cycle, supportCaseId):
+                    cycle.closureStatus = ClosureStatus.OPENED
+                    # The pre-emergency close command stays in GateCommand history but no longer governs this
+                    # cycle; the next LANE_CLEAR must send and confirm a new closeGate.
+                    cycle.closeCommandId = None
+                    cycle.laneClearReceived = False
+                    self._scan_repo.update_cycle(cycle, releaseLane=False)
+                elif cycle is not None and cycle.closureStatus == ClosureStatus.EMERGENCY_HOLD:
+                    superseded = True  # a newer emergency took the lane after this reset was sent
+            self._uow.commit()
+
+        if outcome == CommandOutcome.RESET_CONFIRMED and not superseded:
+            return ScanResult(
+                scanId=supportCaseId, state=ScanState.OPENED, laneId=laneId, commandId=commandId,
+                reason="EMERGENCY_RESET_CONFIRMED",
+            )
+        if superseded:
+            self._health_api.report_event_async(
+                {"alert": "EMERGENCY_RESET_SUPERSEDED", "commandId": commandId, "laneId": laneId}
+            )
+            return ScanResult(
+                scanId=supportCaseId, state=ScanState.UNDETERMINED, laneId=laneId, commandId=commandId,
+                reason="EMERGENCY_SUPERSEDED",
+            )
+        if outcome != CommandOutcome.CONTROLLER_ERROR:
+            self._health_api.report_event_async(
+                {"alert": "EMERGENCY_RESET_NOT_CONFIRMED", "commandId": commandId, "outcome": outcome.value}
+            )
         return ScanResult(
             scanId=supportCaseId,
             state=ScanState.UNDETERMINED,
             laneId=laneId,
-            commandId=cmd_id,
+            commandId=commandId,
             reason=ClosureStatus.EMERGENCY_HOLD.value,
         )
-
 
 def _same_support_case(stored: SupportCase, incoming: SupportCase) -> bool:
     """A resend carries the same evidence; occurredAt may differ because the client stamps it again."""

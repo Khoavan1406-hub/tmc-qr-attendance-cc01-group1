@@ -568,6 +568,10 @@ def test_15s_timeout_degraded_alerts_assisted_and_emergency_reset() -> None:
     rst_fail = facade.requestEmergencyReset("case-emg-1", "LANE-BD-01")
     assert rst_fail.reason == ClosureStatus.EMERGENCY_HOLD.value
 
-    turnstile.reset_outcome = CommandOutcome.RESET_CONFIRMED
+    # A repeated request never resends RESET: it queries the stored command once
+    turnstile.reset_outcome = CommandOutcome.CONTROLLER_ERROR  # would show if a new RESET were sent
+    turnstile.query_outcome = CommandOutcome.RESET_CONFIRMED
     rst_ok = facade.requestEmergencyReset("case-emg-1", "LANE-BD-01")
     assert rst_ok.reason == "EMERGENCY_RESET_CONFIRMED"
+    assert rst_ok.commandId == rst_fail.commandId
+    turnstile.query_outcome = CommandOutcome.UNDETERMINED

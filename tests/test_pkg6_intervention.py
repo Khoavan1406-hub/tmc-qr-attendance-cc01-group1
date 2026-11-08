@@ -298,8 +298,10 @@ def test_emergency_release_hold_blocks_scans_and_unconfirmed_reset_stays_in_hold
     assert undetermined_reset.reason == ClosureStatus.EMERGENCY_HOLD.value
     assert scan_repo.get_active_cycle_for_lane("LANE-BD-01").closureStatus == ClosureStatus.EMERGENCY_HOLD
 
-    # 7. Controller confirms reset with RESET_CONFIRMED -> lane exits EMERGENCY_HOLD
-    turnstile.reset_outcome = CommandOutcome.RESET_CONFIRMED
+    # 7. The guard repeats the reset: the stored UNDETERMINED command is queried (never resent) and the
+    #    controller now reports RESET_CONFIRMED -> lane exits EMERGENCY_HOLD
+    turnstile.reset_outcome = CommandOutcome.CONTROLLER_ERROR  # would show if a new RESET were sent
+    turnstile.query_outcome = CommandOutcome.RESET_CONFIRMED
     http_reset = client.post(
         "/api/interventions/emergency-reset",
         headers=BD_GUARD_SESSION,
@@ -312,6 +314,8 @@ def test_emergency_release_hold_blocks_scans_and_unconfirmed_reset_stays_in_hold
     reset_body = http_reset.json()
     assert reset_body["state"] == "OPENED"
     assert reset_body["reason"] == "EMERGENCY_RESET_CONFIRMED"
+    assert reset_body["commandId"] == undetermined_reset.commandId
+    assert undetermined_reset.commandId != failed_reset.commandId  # CONTROLLER_ERROR allowed one new RESET
 
     # Lane is now OPENED (exited EMERGENCY_HOLD)
     cleared_cycle = scan_repo.get_active_cycle_for_lane("LANE-BD-01")
