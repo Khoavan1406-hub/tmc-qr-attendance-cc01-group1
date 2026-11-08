@@ -155,7 +155,7 @@ Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/d
    * *Kết quả:* Vẫn mở cổng `state: "OPENED"`, nhưng cờ `degradedFlag: true` được gắn vào giao dịch chấm công để đối soát sau.
 3. **Thiết lập chế độ Quá hạn (Watermark cũ 45 phút > 30 phút):** Gọi `POST /api/demo/watermark-age` với `watermarkAgeSeconds=2700`.
 4. **Quét QR:** Gọi `POST /api/gate/scans`.
-   * *Kết quả:* Bị từ chối với `state: "CANNOT_PROCESS"`, `reason: "ELIGIBILITY_CANNOT_BE_VERIFIED"` theo đúng luật an toàn.
+   * *Kết quả:* Bị từ chối với `state: "CANNOT_PROCESS"`, `reason: "ELIGIBILITY_DATA_UNUSABLE_OR_EXPIRED"` theo đúng luật an toàn.
 
 ### Kịch bản 3: Can Thiệp Hỗ Trợ Của Bảo Vệ (Flow B – Assisted Open)
 Mọi endpoint `/api/interventions/*` cần header `X-Guard-Session` (phiên đăng nhập mô phỏng). Dùng `demo-session-guard-bd-01` cho bảo vệ nhà máy BD.
