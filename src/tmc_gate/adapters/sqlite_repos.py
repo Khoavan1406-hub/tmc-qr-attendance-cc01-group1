@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from dataclasses import replace
 from datetime import UTC, datetime
 from types import TracebackType
 
@@ -37,7 +38,7 @@ from tmc_gate.domain.models import (
     SupportCase,
     TokenReservation,
 )
-from tmc_gate.domain.snapshot import EligibilitySnapshot
+from tmc_gate.domain.snapshot import EligibilitySnapshot, EmployeeRight
 from tmc_gate.ports.repositories import (
     IAttendanceRepository,
     IOutboxRepository,
@@ -160,6 +161,13 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             audit_id TEXT PRIMARY KEY,
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS eligibility_snapshots (
+            factory_id TEXT PRIMARY KEY,
+            snapshot_version INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
         );
 
         CREATE TABLE IF NOT EXISTS processed_events (
@@ -720,17 +728,118 @@ class SqliteOutboxRepository(IOutboxRepository):
             return DedupStatus.CONFLICT_FLAGGED
 
 
-class SqliteSnapshotRepository(ISnapshotRepository):
-    """Thread-safe holder for the factory's active EligibilitySnapshot."""
+def _snapshot_to_json(snapshot: EligibilitySnapshot) -> str:
+    return json.dumps(
+        {
+            "factoryId": snapshot.factoryId,
+            "snapshotVersion": snapshot.snapshotVersion,
+            "confirmedWatermark": snapshot.confirmedWatermark.isoformat(),
+            "clockErrorBoundSec": snapshot.clockErrorBoundSec,
+            "isCompleteAndContinuous": snapshot.isCompleteAndContinuous,
+            "verificationKeys": [key.decode("ascii") for key in snapshot.verificationKeys],
+            "employees": {
+                employee_id: {
+                    "active": right.active,
+                    "allowedFactories": sorted(right.allowedFactories),
+                    "allowedLanes": sorted(right.allowedLanes),
+                }
+                for employee_id, right in snapshot.employees.items()
+            },
+            "lanes": {lane_id: direction.value for lane_id, direction in snapshot.lanes.items()},
+        },
+        sort_keys=True,
+    )
 
-    def __init__(self, initial_snapshot: EligibilitySnapshot) -> None:
+
+def _snapshot_from_json(text: str) -> EligibilitySnapshot:
+    data = json.loads(text)
+    return EligibilitySnapshot(
+        factoryId=data["factoryId"],
+        snapshotVersion=int(data["snapshotVersion"]),
+        confirmedWatermark=datetime.fromisoformat(data["confirmedWatermark"]),
+        clockErrorBoundSec=data["clockErrorBoundSec"],
+        isCompleteAndContinuous=bool(data["isCompleteAndContinuous"]),
+        verificationKeys=tuple(key.encode("ascii") for key in data["verificationKeys"]),
+        employees={
+            employee_id: EmployeeRight(
+                employeeId=employee_id,
+                active=bool(right["active"]),
+                allowedFactories=set(right["allowedFactories"]),
+                allowedLanes=set(right["allowedLanes"]),
+            )
+            for employee_id, right in data["employees"].items()
+        },
+        lanes={lane_id: Direction(direction) for lane_id, direction in data["lanes"].items()},
+    )
+
+
+class SqliteSnapshotRepository(ISnapshotRepository):
+    """The factory's active EligibilitySnapshot.
+
+    With a connection the snapshot is stored in SQLite (table eligibility_snapshots) in the same UnitOfWork as
+    the (consumer, eventId) dedup mark, so a restart reloads the last applied rights and a replayed update can
+    never be skipped while its rights are lost. `initial_snapshot` is written only when the database has no
+    snapshot for that factory yet. Without a connection it is an in-memory holder (unit tests only).
+    """
+
+    def __init__(
+        self,
+        initial_snapshot: EligibilitySnapshot,
+        conn: sqlite3.Connection | None = None,
+        lock: threading.RLock | None = None,
+    ) -> None:
+        self._conn = conn
+        self._lock = lock or threading.RLock()
+        self._factory_id = initial_snapshot.factoryId
         self._snapshot = initial_snapshot
-        self._lock = threading.RLock()
+        if conn is not None:
+            with self._lock:
+                conn.execute(
+                    """INSERT INTO eligibility_snapshots (factory_id, snapshot_version, snapshot_json, updated_at)
+                       VALUES (?, ?, ?, ?) ON CONFLICT(factory_id) DO NOTHING""",
+                    (
+                        initial_snapshot.factoryId,
+                        initial_snapshot.snapshotVersion,
+                        _snapshot_to_json(initial_snapshot),
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
 
     def get_snapshot(self) -> EligibilitySnapshot:
         with self._lock:
-            return self._snapshot
+            if self._conn is None:
+                return self._snapshot
+            row = self._conn.execute(
+                "SELECT snapshot_json FROM eligibility_snapshots WHERE factory_id = ?", (self._factory_id,)
+            ).fetchone()
+            return _snapshot_from_json(row["snapshot_json"])
 
     def save_snapshot(self, snapshot: EligibilitySnapshot) -> None:
+        """Stage the snapshot in the current UnitOfWork (it becomes active on commit)."""
         with self._lock:
-            self._snapshot = snapshot
+            if self._conn is None:
+                self._snapshot = snapshot
+                return
+            _require_transaction(self._conn)
+            self._conn.execute(
+                """INSERT INTO eligibility_snapshots (factory_id, snapshot_version, snapshot_json, updated_at)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(factory_id) DO UPDATE SET
+                       snapshot_version = excluded.snapshot_version, snapshot_json = excluded.snapshot_json,
+                       updated_at = excluded.updated_at""",
+                (snapshot.factoryId, snapshot.snapshotVersion, _snapshot_to_json(snapshot), datetime.now(UTC).isoformat()),
+            )
+
+    def trust_additional_key(self, public_key_pem: bytes) -> None:
+        """Demo helper: add a verification key to the stored snapshot without changing rights or version."""
+        with self._lock:
+            current = self.get_snapshot()
+            if public_key_pem in current.verificationKeys:
+                return
+            updated = replace(current, verificationKeys=(*current.verificationKeys, public_key_pem))
+            if self._conn is None:
+                self._snapshot = updated
+                return
+            self._conn.execute(
+                "UPDATE eligibility_snapshots SET snapshot_json = ?, updated_at = ? WHERE factory_id = ?",
+                (_snapshot_to_json(updated), datetime.now(UTC).isoformat(), self._factory_id),
+            )

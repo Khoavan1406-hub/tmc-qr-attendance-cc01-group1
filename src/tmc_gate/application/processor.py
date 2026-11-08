@@ -407,20 +407,26 @@ class GateTransactionProcessor(IPassageEvents):
         if remaining_ms <= 0:
             # The command was certainly not sent: release the lane, but the claimed token stays claimed (§7.3.4).
             with self._uow:
-                self._scan_repo.update_opening_outcome(
-                    scanId=scanId,
-                    cycleId=cycle_id,
-                    commandId=command_id,
-                    scanState=ScanState.CANNOT_PROCESS.value,
-                    commandOutcome=CommandOutcome.NOT_SENT.value,
-                    releaseLane=True,
-                    auditPayload={
-                        "action": "OPEN_DEADLINE_EXPIRED_BEFORE_COMMAND",
-                        "scanId": scanId,
-                        "commandId": command_id,
-                    },
-                )
+                applies, current_scan = self._open_result_applies(scanId, cycle_id)
+                if applies:
+                    self._scan_repo.update_opening_outcome(
+                        scanId=scanId,
+                        cycleId=cycle_id,
+                        commandId=command_id,
+                        scanState=ScanState.CANNOT_PROCESS.value,
+                        commandOutcome=CommandOutcome.NOT_SENT.value,
+                        releaseLane=True,
+                        auditPayload={
+                            "action": "OPEN_DEADLINE_EXPIRED_BEFORE_COMMAND",
+                            "scanId": scanId,
+                            "commandId": command_id,
+                        },
+                    )
+                else:
+                    self._record_open_command_only(command_id, CommandOutcome.NOT_SENT)
                 self._uow.commit()
+            if not applies:
+                return self._superseded_open_result(current_scan, scanId, laneId, command_id, degraded)
             return ScanResult(
                 scanId=scanId,
                 state=ScanState.CANNOT_PROCESS,
@@ -437,13 +443,25 @@ class GateTransactionProcessor(IPassageEvents):
         )
         if outcome == CommandOutcome.UNDETERMINED:
             # Store UNDETERMINED first; keep lane and token; never resend openGate (I-03)
-            self._store_open_outcome(scanId, cycle_id, command_id, ScanState.UNDETERMINED, CommandOutcome.UNDETERMINED)
+            applies, current_scan = self._store_open_outcome(
+                scanId, cycle_id, command_id, ScanState.UNDETERMINED, CommandOutcome.UNDETERMINED
+            )
+            if not applies:
+                return self._superseded_open_result(current_scan, scanId, laneId, command_id, degraded)
             outcome = self._query_or_undetermined(command_id, laneId)
 
         # Step A6 & A7: Persist opening outcome and return kiosk result
         if outcome == CommandOutcome.OPEN_CONFIRMED:
             confirmed_at = datetime.now(UTC)
             with self._uow:
+                # Re-read inside the transaction: an emergency release that committed while openGate was running
+                # has priority, so a late OPEN_CONFIRMED only updates the command history (no OPENED scan,
+                # no passage window, no attendance from a later PASSAGE).
+                applies, current_scan = self._open_result_applies(scanId, cycle_id)
+                if not applies:
+                    self._record_open_command_only(command_id, CommandOutcome.OPEN_CONFIRMED)
+                    self._uow.commit()
+                    return self._superseded_open_result(current_scan, scanId, laneId, command_id, degraded)
                 # The 15-second passage window starts at OPEN_CONFIRMED, not at scan intake (Table 4.23b)
                 opened_cycle = self._scan_repo.get_cycle(cycle_id)
                 if opened_cycle is not None:
@@ -485,8 +503,13 @@ class GateTransactionProcessor(IPassageEvents):
             )
 
         if outcome == CommandOutcome.CONTROLLER_ERROR:
-            # Explicit non-execution: release the lane
+            # Explicit non-execution: release the lane, unless an emergency release now holds it
             with self._uow:
+                applies, current_scan = self._open_result_applies(scanId, cycle_id)
+                if not applies:
+                    self._record_open_command_only(command_id, CommandOutcome.CONTROLLER_ERROR)
+                    self._uow.commit()
+                    return self._superseded_open_result(current_scan, scanId, laneId, command_id, degraded)
                 self._scan_repo.update_opening_outcome(
                     scanId=scanId,
                     cycleId=cycle_id,
@@ -512,9 +535,11 @@ class GateTransactionProcessor(IPassageEvents):
             )
 
         # Still undetermined after the optional query -> PENDING_RECONCILIATION (Table 4.23a)
-        self._store_open_outcome(
+        applies, current_scan = self._store_open_outcome(
             scanId, cycle_id, command_id, ScanState.PENDING_RECONCILIATION, CommandOutcome.UNDETERMINED
         )
+        if not applies:
+            return self._superseded_open_result(current_scan, scanId, laneId, command_id, degraded)
         self._health_api.report_event_async({"alert": "OPEN_UNDETERMINED", "laneId": laneId})
         return ScanResult(
             scanId=scanId,
@@ -531,20 +556,68 @@ class GateTransactionProcessor(IPassageEvents):
             return CommandOutcome.UNDETERMINED
         return self._status_query_port.queryStatus(commandId=commandId, laneId=laneId)
 
+    _AWAITING_OPEN_RESULT = (ScanState.ACCEPTED, ScanState.UNDETERMINED)
+
+    def _open_result_applies(self, scanId: str, cycleId: str) -> tuple[bool, ScanAttempt | None]:
+        """Inside the caller's transaction: may this openGate result still change the scan and the cycle?
+
+        No when an emergency release took the lane (EMERGENCY_HOLD) or already moved the scan on while the
+        command was running; the emergency has priority and the result is kept as command history only.
+        """
+        cycle = self._scan_repo.get_cycle(cycleId)
+        scan = self._scan_repo.get_scan(scanId)
+        applies = (
+            cycle is not None
+            and cycle.closureStatus == ClosureStatus.OPENED
+            and scan is not None
+            and scan.state in self._AWAITING_OPEN_RESULT
+        )
+        return applies, scan
+
+    def _record_open_command_only(self, commandId: str, outcome: CommandOutcome) -> None:
+        """Keep a superseded openGate result in GateCommand history without touching scan, cycle or lane."""
+        command = self._scan_repo.get_command(commandId)
+        if command is None:
+            return
+        if command.outcome in (CommandOutcome.OPEN_CONFIRMED, CommandOutcome.CONTROLLER_ERROR):
+            return  # a confirmed result is never overwritten
+        command.outcome = outcome
+        self._scan_repo.save_command(command)
+
+    def _superseded_open_result(
+        self, scan: ScanAttempt | None, scanId: str, laneId: str, commandId: str, degraded: bool
+    ) -> ScanResult:
+        self._health_api.report_event_async(
+            {"alert": "OPEN_RESULT_AFTER_EMERGENCY", "scanId": scanId, "commandId": commandId, "laneId": laneId}
+        )
+        return ScanResult(
+            scanId=scanId,
+            state=scan.state if scan is not None else ScanState.PENDING_RECONCILIATION,
+            laneId=laneId,
+            degradedFlag=degraded,
+            reason=scan.reason if scan is not None else "EMERGENCY_RELEASE_DURING_OPEN_CYCLE",
+            commandId=commandId,
+        )
+
     def _store_open_outcome(
         self, scanId: str, cycleId: str, commandId: str, state: ScanState, outcome: CommandOutcome
-    ) -> None:
+    ) -> tuple[bool, ScanAttempt | None]:
         with self._uow:
-            self._scan_repo.update_opening_outcome(
-                scanId=scanId,
-                cycleId=cycleId,
-                commandId=commandId,
-                scanState=state.value,
-                commandOutcome=outcome.value,
-                releaseLane=False,
-                auditPayload={"action": f"OPEN_{state.value}", "scanId": scanId, "commandId": commandId},
-            )
+            applies, current_scan = self._open_result_applies(scanId, cycleId)
+            if applies:
+                self._scan_repo.update_opening_outcome(
+                    scanId=scanId,
+                    cycleId=cycleId,
+                    commandId=commandId,
+                    scanState=state.value,
+                    commandOutcome=outcome.value,
+                    releaseLane=False,
+                    auditPayload={"action": f"OPEN_{state.value}", "scanId": scanId, "commandId": commandId},
+                )
+            else:
+                self._record_open_command_only(commandId, outcome)
             self._uow.commit()
+        return applies, current_scan
 
     def getScanStatus(self, scanId: str) -> ScanResult | None:
         """Return stored scan status for kiosk retry inquiries without downgrading OPENED (Table 4.19)."""
@@ -594,6 +667,7 @@ class GateTransactionProcessor(IPassageEvents):
             )
             is_late = not was_already_passed and (
                 window_expired
+                or cycle.closureStatus == ClosureStatus.EMERGENCY_HOLD
                 or cycle.passageStatus == PassageStatus.NO_PASSAGE
                 or (scan is not None and scan.state != ScanState.OPENED)
             )
@@ -775,27 +849,62 @@ class GateTransactionProcessor(IPassageEvents):
         if alert is not None:
             self._health_api.report_event_async({"alert": alert, "laneId": lane_id})
 
-    def handlePassageTimeout(self, cycleId: str) -> bool:
+    def handlePassageTimeout(self, cycleId: str, now: datetime | None = None) -> bool:
         """Flag missing passage after 15 seconds (15_000 ms) as NO_PASSAGE and PENDING_RECONCILIATION (§4.2.5).
 
+        Called by the passage-timeout worker (see sweepPassageTimeouts). Deadline and state are re-checked inside
+        the transaction, so a PASSAGE or an emergency that committed first wins, and an early call does nothing.
         Never sends closeGate from the timer (I-05).
         """
-        cycle = self._scan_repo.get_cycle(cycleId)
-        if cycle is None or cycle.passageStatus != PassageStatus.WAITING:
-            return False
-
-        cycle.passageStatus = PassageStatus.NO_PASSAGE
-        already_closed = cycle.closureStatus == ClosureStatus.CLOSED
+        current_time = now or datetime.now(UTC)
         with self._uow:
+            cycle = self._scan_repo.get_cycle(cycleId)
+            if (
+                cycle is None
+                or cycle.passageStatus != PassageStatus.WAITING
+                or cycle.scanId is None
+                or not _is_after(current_time, cycle.observationDeadline)
+            ):
+                self._uow.rollback()
+                return False
+            scan = self._scan_repo.get_scan(cycle.scanId)
+            if scan is None or scan.state != ScanState.OPENED:
+                # No passage window is running yet (open result pending) or the scan already moved on
+                self._uow.rollback()
+                return False
+            cycle.passageStatus = PassageStatus.NO_PASSAGE
+            already_closed = cycle.closureStatus == ClosureStatus.CLOSED
             self._scan_repo.update_cycle(cycle, releaseLane=already_closed)
-            if cycle.scanId:
-                scan = self._scan_repo.get_scan(cycle.scanId)
-                if scan and scan.state == ScanState.OPENED:
-                    scan.state = ScanState.PENDING_RECONCILIATION
-                    scan.reason = "MISSING_PASSAGE_AFTER_15S"
-                    self._scan_repo.save_scan(scan)
+            scan.state = ScanState.PENDING_RECONCILIATION
+            scan.reason = "MISSING_PASSAGE_AFTER_15S"
+            self._scan_repo.save_scan(
+                scan,
+                audit_payload={"action": "MISSING_PASSAGE_AFTER_15S", "scanId": scan.scanId, "cycleId": cycleId},
+            )
             self._uow.commit()
+        self._health_api.report_event_async(
+            {"alert": "MISSING_PASSAGE_AFTER_15S", "scanId": scan.scanId, "laneId": cycle.laneId}
+        )
         return True
+
+    def sweepPassageTimeouts(self, laneIds: list[str], now: datetime | None = None) -> int:
+        """One pass of the passage-timeout worker: time out every lane whose 15-second window has passed.
+
+        Returns how many cycles were moved to NO_PASSAGE. Only reads lane reservations and then delegates to
+        handlePassageTimeout, which decides inside its own transaction.
+        """
+        current_time = now or datetime.now(UTC)
+        timed_out = 0
+        for lane_id in laneIds:
+            cycle = self._scan_repo.get_active_cycle_for_lane(lane_id)
+            if (
+                cycle is not None
+                and cycle.passageStatus == PassageStatus.WAITING
+                and _is_after(current_time, cycle.observationDeadline)
+                and self.handlePassageTimeout(cycle.cycleId, now=current_time)
+            ):
+                timed_out += 1
+        return timed_out
 
     # --- Flow B: Assisted & Emergency operations called via GateCoreFacade ---
 
@@ -921,7 +1030,10 @@ class GateTransactionProcessor(IPassageEvents):
         if outcome == CommandOutcome.UNDETERMINED:
             command.outcome = CommandOutcome.UNDETERMINED
             with self._uow:
-                self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
+                if self._assisted_cycle_still_open(cycle_id):
+                    self._scan_repo.update_cycle(cycle, releaseLane=False, command=command)
+                else:
+                    self._record_open_command_only(cmd_id, CommandOutcome.UNDETERMINED)
                 self._uow.commit()
             outcome = self._query_or_undetermined(cmd_id, laneId)
 
@@ -930,8 +1042,24 @@ class GateTransactionProcessor(IPassageEvents):
         if outcome == CommandOutcome.OPEN_CONFIRMED:
             cycle.observationDeadline = datetime.now(UTC) + timedelta(milliseconds=self.PASSAGE_OBSERVATION_WINDOW_MS)
         with self._uow:
-            self._scan_repo.update_cycle(cycle, releaseLane=release_lane, command=command)
+            # An emergency release that committed while openGate ran keeps EMERGENCY_HOLD; the result is history only
+            superseded = not self._assisted_cycle_still_open(cycle_id)
+            if superseded:
+                self._record_open_command_only(cmd_id, outcome)
+            else:
+                self._scan_repo.update_cycle(cycle, releaseLane=release_lane, command=command)
             self._uow.commit()
+        if superseded:
+            self._health_api.report_event_async(
+                {"alert": "OPEN_RESULT_AFTER_EMERGENCY", "supportCaseId": supportCaseId, "commandId": cmd_id}
+            )
+            return ScanResult(
+                scanId=supportCaseId,
+                state=ScanState.PENDING_RECONCILIATION,
+                laneId=laneId,
+                commandId=cmd_id,
+                reason=ClosureStatus.EMERGENCY_HOLD.value,
+            )
 
         state = (
             ScanState.OPENED
@@ -943,6 +1071,10 @@ class GateTransactionProcessor(IPassageEvents):
             )
         )
         return ScanResult(scanId=supportCaseId, state=state, laneId=laneId, commandId=cmd_id, reason=outcome.value)
+
+    def _assisted_cycle_still_open(self, cycleId: str) -> bool:
+        current = self._scan_repo.get_cycle(cycleId)
+        return current is not None and current.closureStatus == ClosureStatus.OPENED
 
     def requestEmergencyRelease(self, supportCaseId: str, laneId: str, now: datetime | None = None) -> ScanResult:
         """Place the lane in EMERGENCY_HOLD and invoke emergencyRelease (Flow B, Table 4.22).
@@ -965,7 +1097,9 @@ class GateTransactionProcessor(IPassageEvents):
                     cycle.supportCaseId = cycle.supportCaseId or supportCaseId
                     if active.scanId and active.passageStatus == PassageStatus.WAITING:
                         scan = self._scan_repo.get_scan(active.scanId)
-                        if scan and scan.state == ScanState.OPENED:
+                        # OPENED, or still waiting for its openGate result: an emergency always wins, so no
+                        # later OPEN_CONFIRMED / PASSAGE can turn this scan into attendance
+                        if scan and scan.state in (ScanState.OPENED, *self._AWAITING_OPEN_RESULT):
                             scan.state = ScanState.PENDING_RECONCILIATION
                             scan.reason = "EMERGENCY_RELEASE_DURING_OPEN_CYCLE"
                             self._scan_repo.save_scan(scan)

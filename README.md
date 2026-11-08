@@ -3,8 +3,9 @@
 Repository hiện thực hóa **Task 2 (Code Implementation)** của môn **Kiến trúc Phần mềm (HK261 – HCMUT)** cho hệ thống chấm công và kiểm soát ra vào bằng mã QR tại công ty sản xuất **TMC** (hai nhà máy Bình Dương và Long An).
 
 - **Report kiến trúc:** [Source LaTeX và hướng dẫn build](report/README.md) nằm trong `report/`, cùng repo với `src/` và `tests/` để đối chiếu thiết kế với code.
-- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật. Lưu trữ SQLite (Package 4) đang được hoàn thiện; các test hiện tại của M1/M3 chạy trên fake repository và fake controller.
-- **Trạng thái hiện tại:** Package 5 (adapter cửa xoay giả lập + endpoint demo) đã có code và test. Package 2 và 4 còn TODO, nên kịch bản demo Swagger ở mục 6 chỉ chạy trọn được sau khi hai package này được merge (trước đó `POST /api/demo/qr-tokens` trả HTTP 501).
+- **Hai module triển khai chính:** **`M1 Gate Core`** (Xử lý quét QR – Flow A) và **`M3 Gate Intervention`** (Bảo vệ can thiệp hỗ trợ & khẩn cấp – Flow B) chạy logic nghiệp vụ thật trên SQLite (`SqliteUnitOfWork` + repositories). Test đơn vị dùng fake repository; test tích hợp `tests/test_e2e_sqlite_flows.py` và `tests/test_submission_audit_regressions.py` chạy qua `create_app()` với file SQLite thật.
+- **Trạng thái hiện tại:** Package 1–6 đã merge vào `dev`. Snapshot quyền truy cập được lưu trong SQLite cùng dấu chống trùng update, nên khởi động lại vẫn giữ quyền đã áp dụng. Một worker nền tự chuyển cycle quá 15 giây không có PASSAGE sang `NO_PASSAGE` / `PENDING_RECONCILIATION` (không gửi `closeGate`).
+- **Giới hạn của prototype:** controller, WAN/Site Sync, HR/Payroll và identity/authorization là giả lập hoặc stub; test chức năng không thay cho đo hiệu năng (2 giây, 800 lượt/30 phút) hay đánh giá bảo mật.
 - **Thành phần hỗ trợ demo:** Bộ cấp mã QR Ed25519 (một thành phần của `M4 QrCredentialIssuance`) và bộ mô phỏng cửa xoay `TurnstileAdapter` (`M2 Turnstile Integration`) chỉ kích hoạt ở chế độ demo (`demo_mode=True`).
 
 ---
@@ -132,8 +133,16 @@ pytest -v tests/test_pkg6_intervention.py tests/test_pkg6_pr8_regressions.py tes
 
 ### Bước 3: Khởi động server FastAPI & Mở Swagger UI
 ```bash
-uvicorn tmc_gate.api.app:app --reload --app-dir src
+# Dữ liệu trong bộ nhớ (mất khi tắt server)
+uvicorn tmc_gate.api.app:app --app-dir src
+
+# Lưu vào file SQLite để demo khởi động lại vẫn giữ dữ liệu
+# Linux/macOS/Git Bash:
+TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --app-dir src
+# Windows PowerShell:
+$env:TMC_GATE_DB="factory.sqlite3"; uvicorn tmc_gate.api.app:app --app-dir src
 ```
+Không dùng `--reload` khi demo với file: chế độ reload khởi động lại tiến trình mỗi khi sửa code. Khi mở lại một file cũ, snapshot đã lưu có watermark cũ nên có thể rơi vào `CANNOT_PROCESS`; gọi `POST /api/demo/watermark-age` với `watermarkAgeSeconds=10` để làm mới.
 Truy cập giao diện tương tác Swagger UI tại: **`http://localhost:8000/docs`**
 
 ---
