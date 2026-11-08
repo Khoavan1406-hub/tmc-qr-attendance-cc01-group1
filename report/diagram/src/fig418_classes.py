@@ -1,4 +1,4 @@
-"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (dev 5c3ff40, 06/11/2026).
+"""Figure 4.18 - Gate Core class diagram, drawn from src/tmc_gate (checked again on dev dd7b7fb, 08/11/2026).
 
 Usage: python fig418_classes.py > ../class/figure-4-18-gate-core-classes.drawio
 Panel A: application classes, ports owned by Gate Core, and the adapters that implement them.
@@ -182,7 +182,7 @@ scan = box("ScanAttempt", C1, R2, CW, attrs=["scanId: str", "laneId: str", "stat
 cmd = box("GateCommand", C3, R2, CW, attrs=["commandId: str", "cycleId: str", "commandType: CommandType", "outcome: CommandOutcome",
                                            "issuedAt: datetime | None"])
 R3 = BY + 460
-tok = box("TokenReservation", C1, R3, CW, attrs=["tokenId: str  {unique}", "scanId: str", "claimedAt, expiresAt: datetime"])
+tok = box("TokenReservation", C1, R3, CW, attrs=["tokenId: str  {unique per factory}", "factoryId: str", "scanId: str  {unique}", "claimedAt, expiresAt: datetime"])
 att = box("AttendanceTransaction", C2, R3, CW, attrs=["transactionId: str", "scanId: str  {unique}", "passageEventId: str  {unique}",
                                                     "employeeId: str", "degradedFlag: bool"])
 pas = box("PassageEvent", C3, R3, CW, attrs=["passageEventId: str", "commandId: str", "cycleId: str", "occurredAt: datetime",

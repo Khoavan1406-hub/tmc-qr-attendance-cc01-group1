@@ -24,7 +24,7 @@ M1 Gate Core & Implemented & Access check against the factory snapshot, the atom
 \hline
 M3 Gate Intervention & Implemented & Guard identity from the session, server-side authority check, write-once support cases, assisted opening, emergency release, and emergency reset. \\
 \hline
-Factory storage (SQLite) & \tofill{Package 4} & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core. \\
+Factory storage (SQLite) & Implemented & SqliteUnitOfWork and the SQLite repositories behind the storage ports of Gate Core: the atomic accept write, the token claim per factory, passage and attendance in one transaction, the outbox, and event deduplication. \\
 \hline
 M2 Turnstile Adapter & Simulated & SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the turnstile ports against a simulated controller. Both pass the same contract tests, and SimulatedTurnstileAdapter also answers status queries. No real controller is connected. \\
 \hline
@@ -131,7 +131,7 @@ Section 7.1 states how SOLID shapes the modules. Table 9.4 shows where each prin
 \endhead
 \multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.4. SOLID Principles Mapped to the Code}} \\
 \endlastfoot
-SRP & AccessDecision (\code{application/access_decision.py}) only checks the token and the snapshot and returns a DecisionResult; it has no turnstile port. EligibilitySnapshot (\code{domain/snapshot.py}) owns the freshness and clock rules. GateTransactionProcessor (\code{application/processor.py}) owns the gate cycle. InterventionService (\code{application/intervention.py}) checks guard authority and leaves gate commands to Gate Core. & \code{test_pkg1_snapshot.py} tests the snapshot rules alone. \code{test_pkg6_*} test guard rules through a fake IInterventionRequest. AccessDecision tests: \tofill{Package 2}. \\
+SRP & AccessDecision (\code{application/access_decision.py}) only checks the token and the snapshot and returns a DecisionResult; it has no turnstile port. EligibilitySnapshot (\code{domain/snapshot.py}) owns the freshness and clock rules. GateTransactionProcessor (\code{application/processor.py}) owns the gate cycle. InterventionService (\code{application/intervention.py}) checks guard authority and leaves gate commands to Gate Core. & \code{test_pkg1_snapshot.py} tests the snapshot rules alone. \code{test_pkg6_*} test guard rules through a fake IInterventionRequest. \code{test_pkg2_access_decision.py} calls AccessDecision.evaluate twice on the same snapshot and gets the same answer, so the check has no side effect. \\
 \hline
 OCP & A new controller is a new class that implements ITurnstileControl in \code{adapters/}; only \code{api/app.py} chooses which adapter is used. & The processor tests run on fake controllers, and \code{test_pkg5_adapter_with_processor.py} runs the same GateTransactionProcessor with both adapter classes, with no change to the processor. \\
 \hline
@@ -161,7 +161,7 @@ Table 9.5 links the main gate rules of Chapters 4 to 7 to the tests that check t
 \endhead
 \multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.5. Design Rules and Their Tests}} \\
 \endlastfoot
-Flow A, ADR-02 & ACCEPTED, the token claim, and the new GateCycle are stored before openGate; a busy lane returns LANE\_BUSY without claiming the token. & \code{test_pkg3_processor.py}; with SQLite: \tofill{Package 4} \\
+Flow A, ADR-02 & ACCEPTED, the token claim, and the new GateCycle are stored before openGate; a busy lane returns LANE\_BUSY without claiming the token. & \code{test_pkg3_processor.py}, \code{test_pkg4_sqlite_repos.py}, \code{test_e2e_sqlite_flows.py} \\
 \hline
 Table 5.5 & openGate gets min(700 ms, time left of the 2-second budget); if no time is left, the scan ends as CANNOT\_PROCESS, the lane is released, and the token stays claimed. & \code{test_pkg3_rules.py}, \code{test_pkg3_pr2_regressions.py} \\
 \hline
@@ -173,7 +173,7 @@ I-05, Table 4.23b & closeGate is sent once after LANE\_CLEAR; the 15-second time
 \hline
 I-10, Section 5.7.2 & NORMAL up to 60 s, DEGRADED below 30 min, CANNOT\_PROCESS from 30 min, or when the clock error bound is unknown or at least 2 s, or the data is not continuous. & \code{test_pkg1_snapshot.py} \\
 \hline
-ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use claim of tokenId. & \tofill{Package 2}; concurrent claim: \tofill{Package 4} \\
+ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use claim of tokenId. & \code{test_pkg2_*.py}; two connections claiming one token: \code{test_pkg4_sqlite_repos.py}; copied QR on another lane: \code{test_e2e_sqlite_flows.py} \\
 \hline
 Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one command per supportCaseId; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py} \\*
 \hline\noalign{\nobreak}
@@ -203,24 +203,40 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_pkg1_snapshot.py} & Watermark and clock limits, continuity, local rights & 146 & Domain only \\
 \hline
-\code{test_pkg2_access_decision.py} & Signature, expiry, factory binding & \tofill{n} & \tofill{} \\
+\code{test_pkg2_*.py} & Signature, 60-second expiry, factory binding, key rotation, clock and watermark limits & 26 & Snapshot and real Ed25519 keys \\
 \hline
 \code{test_pkg3_*.py} & Flow A cycle, deadline, UNDETERMINED, passage and close rules, emergency races & 37 & Fake storage and controller \\
 \hline
-\code{test_pkg4_sqlite_repos.py} & Atomic write, rollback, concurrent token claim, event deduplication & \tofill{n} & SQLite file \\
+\code{test_pkg4_*.py} & Atomic write, rollback, concurrent token claim, event deduplication, storage time budget & 50 & SQLite file \\
 \hline
 \code{test_pkg5_*.py} & One contract on both adapters, processor with real adapters, demo endpoints, review regressions & 135 (+1 expected failure) & Simulated controller; fake storage \\
 \hline
 \code{test_pkg6_*.py} & Flow B, guard session, support cases, emergency hold and reset & 27 & Fake storage and controller \\*
 \hline\noalign{\nobreak}
-\code{test_flow_a_e2e.py} & Flow A over HTTP: scan, status, PASSAGE, LANE\_CLEAR & \tofill{n} & \tofill{SQLite and simulated adapter?} \\
+\code{test_flow_a_e2e.py} & Flow A over HTTP: scan, status, PASSAGE, LANE\_CLEAR & 1 & Fake storage and controller \\
 \hline
-\multicolumn{2}{|l|}{\textbf{Total}} & \tofill{n} & \tofill{skipped: n} \\
+\code{test_e2e_sqlite_flows.py} & Flow A (7 tests) and Flow B (3 tests) through \code{create_app()} & 10 & SQLite file, Ed25519, simulated controller \\
+\hline
+\multicolumn{2}{|l|}{\textbf{Total} (commit dd7b7fb, Python 3.12)} & \textbf{436} & 0 skipped, 1 expected failure \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.6}Test Results of the Submitted Version}
 
-\tofill{One paragraph on the Flow A end-to-end run with SQLite and the simulated adapter, and on the Swagger demo, once the code thread reports the real run.}
+The expected failure is on purpose: it is the adapter that treats a receipt as an opening, and the test shows that it breaks the turnstile contract (Section 9.4). CI on GitHub Actions runs the same suite on every push and pull request, and it was green on this commit.
+
+The ten tests in \code{test_e2e_sqlite_flows.py} are the closest we get to a real run. Each one builds the whole application with \code{create_app()} on a real SQLite file, signs QR codes with Ed25519, talks to it over HTTP, and then opens the file with a separate connection to check what was really committed. For Flow A they show that:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item a full cycle where the controller sends every signal twice still gives one openGate, one attendance record, and one closeGate;
+  \item a copied QR code scanned on another lane is rejected as a replay, and a malformed token or a suspended employee is rejected before any command;
+  \item with a watermark age of 300 seconds the scan is accepted in DEGRADED mode and the attendance record carries the degraded flag, and at 1800 seconds the scan is CANNOT\_PROCESS;
+  \item an UNDETERMINED opening is queried once and then becomes PENDING\_RECONCILIATION without a second open command, and CONTROLLER\_ERROR releases the lane;
+  \item the stored state is still there after the application is restarted on the same file.
+\end{itemize}
+
+For Flow B they show that a request without a guard session gets HTTP 401, that an assisted opening stores the support case once and creates no attendance, and that an emergency hold makes new scans return LANE\_BUSY until the reset, after which LANE\_CLEAR closes the gate. One rule has no end-to-end test: a PASSAGE that arrives after the 15-second window. It is checked only at processor level (\code{test_pkg3_rules.py}) and for storage (\code{test_pkg4_sqlite_repos.py}).
+
+We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. They were not run on a separate Uvicorn server, so the Swagger demo itself is a manual step.
 
 \Needspace{9\baselineskip}
 \subsection*{9.7. What the Prototype Does Not Show}
