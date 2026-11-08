@@ -53,7 +53,7 @@ The source code, tests, and the LaTeX source of this report are in one GitHub re
 {\small\url{https://github.com/Khoavan1406-hub/tmc-qr-attendance-cc01-group1}}
 \end{center}
 
-The submitted version is the tag \texttt{m2-submission}. \tofill{create tag and confirm repository access for the lecturer} Table 9.2 lists the stack and why we picked each part.
+The version we submit is the commit on the \texttt{main} branch tagged \texttt{m2-submission}. Table 9.2 lists the stack and why we picked each part.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{90.5pt}|>{\raggedright\arraybackslash}p{120.5pt}|>{\raggedright\arraybackslash}p{199.5pt}|}
 \hline
@@ -230,7 +230,7 @@ The ten tests in \code{test_e2e_sqlite_flows.py} are the closest we get to a rea
   \item a full cycle where the controller sends every signal twice still gives one openGate, one attendance record, and one closeGate;
   \item a copied QR code scanned on another lane is rejected as a replay, and a malformed token or a suspended employee is rejected before any command;
   \item with a watermark age of 300 seconds the scan is accepted in DEGRADED mode and the attendance record carries the degraded flag, and at 1800 seconds the scan is CANNOT\_PROCESS;
-  \item an UNDETERMINED opening is queried once and, with no second open command, it becomes PENDING\_RECONCILIATION; a CONTROLLER\_ERROR releases the lane;
+  \item an UNDETERMINED opening becomes PENDING\_RECONCILIATION without a second openGate, and the lane and the token stay held; a CONTROLLER\_ERROR releases the lane. The rule that the controller is queried exactly once is checked separately in \code{test_pkg5_adapter_with_processor.py};
   \item the stored state is still there after the application is restarted on the same file.
 \end{itemize}
 
