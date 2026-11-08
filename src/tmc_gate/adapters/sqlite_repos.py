@@ -15,6 +15,7 @@ import sqlite3
 import threading
 import time
 import uuid
+from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime
 from types import TracebackType
@@ -42,6 +43,7 @@ from tmc_gate.domain.snapshot import EligibilitySnapshot, EmployeeRight
 from tmc_gate.ports.repositories import (
     IAttendanceRepository,
     IOutboxRepository,
+    IPassageWindowQuery,
     IScanRepository,
     ISnapshotRepository,
     IUnitOfWork,
@@ -254,6 +256,13 @@ class SqliteUnitOfWork(IUnitOfWork):
         self._lock = lock or threading.RLock()
         self._in_tx = False
         self._owner_thread: int | None = None
+        self._after_commit: list[Callable[[], None]] = []
+
+    def after_commit(self, callback: Callable[[], None]) -> None:
+        """Run `callback` once the current transaction has committed (adapter-internal, e.g. read caches)."""
+        if not self._owned_by_caller():
+            raise RuntimeError("after_commit() requires a transaction begun by this thread")
+        self._after_commit.append(callback)
 
     @property
     def connection(self) -> sqlite3.Connection:
@@ -293,11 +302,16 @@ class SqliteUnitOfWork(IUnitOfWork):
         """Commit staged writes; a failed commit rolls back before releasing the lock."""
         if not self._owned_by_caller():
             raise RuntimeError("commit() called without a transaction begun by this thread")
+        callbacks, self._after_commit = self._after_commit, []
+        committed = False
         try:
             self._conn.commit()
+            committed = True
+            for callback in callbacks:  # still under the lock: readers never see the cache ahead of the database
+                callback()
         finally:
             try:
-                if self._conn.in_transaction:
+                if not committed and self._conn.in_transaction:
                     self._conn.rollback()
             finally:
                 self._finish()
@@ -317,6 +331,7 @@ class SqliteUnitOfWork(IUnitOfWork):
             self._finish()
 
     def _finish(self) -> None:
+        self._after_commit = []
         if self._in_tx:
             self._in_tx = False
             self._owner_thread = None
@@ -333,7 +348,7 @@ class SqliteUnitOfWork(IUnitOfWork):
             self.rollback()
 
 
-class SqliteScanRepository(IScanRepository):
+class SqliteScanRepository(IScanRepository, IPassageWindowQuery):
     """SQLite implementation of IScanRepository operating within SqliteUnitOfWork's transaction context."""
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
@@ -516,6 +531,19 @@ class SqliteScanRepository(IScanRepository):
                 """SELECT gate_cycles.* FROM gate_commands JOIN gate_cycles USING (cycle_id)
                    WHERE command_id = ?""", (commandId,),
             ).fetchone()
+            return _read_cycle(row) if row is not None else None
+
+    def list_cycles_awaiting_passage(self, deadline_before: datetime) -> list[GateCycle]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM gate_cycles WHERE passage_status = ?", (PassageStatus.WAITING.value,)
+            ).fetchall()
+        cycles = [_read_cycle(row) for row in rows]
+        return [cycle for cycle in cycles if cycle.observationDeadline < deadline_before]
+
+    def get_cycle_by_scan(self, scanId: str) -> GateCycle | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gate_cycles WHERE scan_id = ?", (scanId,)).fetchone()
             return _read_cycle(row) if row is not None else None
 
     def get_cycle(self, cycleId: str) -> GateCycle | None:
@@ -780,6 +808,10 @@ class SqliteSnapshotRepository(ISnapshotRepository):
     the (consumer, eventId) dedup mark, so a restart reloads the last applied rights and a replayed update can
     never be skipped while its rights are lost. `initial_snapshot` is written only when the database has no
     snapshot for that factory yet. Without a connection it is an in-memory holder (unit tests only).
+
+    Reads never wait for the shared lock: get_snapshot() returns the last committed snapshot, which the
+    UnitOfWork publishes right after commit (before releasing the lock). A scan therefore cannot be blocked
+    past its deadline by another request's transaction and never sees an uncommitted snapshot.
     """
 
     def __init__(
@@ -787,11 +819,15 @@ class SqliteSnapshotRepository(ISnapshotRepository):
         initial_snapshot: EligibilitySnapshot,
         conn: sqlite3.Connection | None = None,
         lock: threading.RLock | None = None,
+        uow: "SqliteUnitOfWork | None" = None,
     ) -> None:
+        if conn is not None and uow is None:
+            raise ValueError("a SQLite-backed snapshot repository needs the UnitOfWork that commits it")
         self._conn = conn
+        self._uow = uow
         self._lock = lock or threading.RLock()
         self._factory_id = initial_snapshot.factoryId
-        self._snapshot = initial_snapshot
+        self._committed = initial_snapshot
         if conn is not None:
             with self._lock:
                 conn.execute(
@@ -804,21 +840,21 @@ class SqliteSnapshotRepository(ISnapshotRepository):
                         datetime.now(UTC).isoformat(),
                     ),
                 )
+                row = conn.execute(
+                    "SELECT snapshot_json FROM eligibility_snapshots WHERE factory_id = ?", (self._factory_id,)
+                ).fetchone()
+                self._committed = _snapshot_from_json(row["snapshot_json"])
 
     def get_snapshot(self) -> EligibilitySnapshot:
-        with self._lock:
-            if self._conn is None:
-                return self._snapshot
-            row = self._conn.execute(
-                "SELECT snapshot_json FROM eligibility_snapshots WHERE factory_id = ?", (self._factory_id,)
-            ).fetchone()
-            return _snapshot_from_json(row["snapshot_json"])
+        # A fresh copy each time: callers may adjust fields of the object they receive.
+        snapshot = self._committed
+        return replace(snapshot, employees={k: replace(v) for k, v in snapshot.employees.items()})
 
     def save_snapshot(self, snapshot: EligibilitySnapshot) -> None:
-        """Stage the snapshot in the current UnitOfWork (it becomes active on commit)."""
+        """Stage the snapshot in the current UnitOfWork; it becomes the active snapshot when that commits."""
         with self._lock:
             if self._conn is None:
-                self._snapshot = snapshot
+                self._committed = snapshot
                 return
             _require_transaction(self._conn)
             self._conn.execute(
@@ -828,18 +864,22 @@ class SqliteSnapshotRepository(ISnapshotRepository):
                        updated_at = excluded.updated_at""",
                 (snapshot.factoryId, snapshot.snapshotVersion, _snapshot_to_json(snapshot), datetime.now(UTC).isoformat()),
             )
+            staged = _snapshot_from_json(_snapshot_to_json(snapshot))
+            self._uow.after_commit(lambda: self._publish(staged))
+
+    def _publish(self, snapshot: EligibilitySnapshot) -> None:
+        self._committed = snapshot
 
     def trust_additional_key(self, public_key_pem: bytes) -> None:
         """Demo helper: add a verification key to the stored snapshot without changing rights or version."""
         with self._lock:
-            current = self.get_snapshot()
+            current = self._committed
             if public_key_pem in current.verificationKeys:
                 return
             updated = replace(current, verificationKeys=(*current.verificationKeys, public_key_pem))
-            if self._conn is None:
-                self._snapshot = updated
-                return
-            self._conn.execute(
-                "UPDATE eligibility_snapshots SET snapshot_json = ?, updated_at = ? WHERE factory_id = ?",
-                (_snapshot_to_json(updated), datetime.now(UTC).isoformat(), self._factory_id),
-            )
+            if self._conn is not None:
+                self._conn.execute(
+                    "UPDATE eligibility_snapshots SET snapshot_json = ?, updated_at = ? WHERE factory_id = ?",
+                    (_snapshot_to_json(updated), datetime.now(UTC).isoformat(), self._factory_id),
+                )
+            self._committed = updated

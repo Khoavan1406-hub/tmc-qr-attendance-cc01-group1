@@ -111,7 +111,7 @@ def create_app(
 
     attendance_repo = SqliteAttendanceRepository(conn, lock=uow.lock)
     outbox_repo = SqliteOutboxRepository(conn, lock=uow.lock)
-    snapshot_repo = SqliteSnapshotRepository(initial_snapshot, conn=conn, lock=uow.lock)
+    snapshot_repo = SqliteSnapshotRepository(initial_snapshot, conn=conn, lock=uow.lock, uow=uow)
     if demo_mode:
         # Demo only: the issuer key is regenerated on each start. A restored snapshot keeps its own keys and
         # rights; the current demo issuer key is added as if central had published it through Site Sync.
@@ -140,6 +140,7 @@ def create_app(
         uow=uow,
         status_query_port=turnstile_adapter,
         snapshot_repo=snapshot_repo,
+        passage_window_query=scan_repo,
     )
     gate_core_facade = GateCoreFacade(
         processor=processor,
