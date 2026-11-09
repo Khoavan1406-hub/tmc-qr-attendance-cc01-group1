@@ -5,15 +5,9 @@
 \addcontentsline{toc}{section}{4. LOGICAL ARCHITECTURE}
 
 
-This chapter describes the logical architecture of TMC. Gate work runs in an application at each factory, while management, consolidation, and handover run in a central application. The chapter has three parts:
+This chapter describes the logical architecture of TMC. Following Chapter 3, gate work runs in an application at each factory, while management, consolidation, and the HR/Payroll handover run in a central application. We first build the Module View (Section 4.1): how we found the modules, what each one contains, and how they depend on each other. Section 4.2 then looks at the same system at runtime through the Component-and-Connector View and walks through the three main flows, namely the QR scan, assisted access, and the HR/Payroll handover, together with their states and failure paths. Section 4.3 closes the chapter with the classes behind the gate flow.
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Module View}: 13 modules, their dependencies, and the inside of each module.
-  \item \textbf{Component-and-Connector View}: runtime components, interfaces, and event channels.
-  \item \textbf{Main processing flows}: the QR scan, assisted access, the HR/Payroll handover, and their states and failure paths.
-\end{itemize}
-
-Everything in this chapter is our proposed design.
+Sections 4.1 and 4.2 are our proposed design for the whole system. Section 4.3 is different: its class diagrams are drawn from the Task 2 code, so they show what we actually built for Gate Core and Gate Intervention.
 
 \subsection*{4.1. Module View}
 
@@ -27,7 +21,7 @@ This section explains how we arrived at the modules, how they depend on each oth
 \phantomsection
 \addcontentsline{toc}{subsubsection}{4.1.1. Module Identification}
 
-We identified the components with the actor/actions approach. Candidate components came from the actions of the six user groups, from the controller and HR/Payroll interfaces, and from the two main business flows: the gate flow and the HR/Payroll handover. Work was grouped by its reason to change rather than by data entity. Approval, reporting, and handover all use attendance data, but they follow different rules, so they did not end up in one component.
+To find the components, we used the actor/actions approach from the component-based thinking chapter of Richards and Ford's \textit{Fundamentals of Software Architecture}. We listed what each of the six user groups does with the system, what the controller and HR/Payroll interfaces need, and what happens in the two main business flows (the gate flow and the HR/Payroll handover). Each group of actions became a candidate component. We grouped work by its reason to change, not by the data it touches, because grouping by entity would have pulled approval, reporting, and handover into one component just because all three read attendance data, even though they follow different rules.
 
 \Needspace{6\baselineskip}
 Table 4.1 lists the initial components and their responsibilities.
@@ -370,9 +364,7 @@ Figures 4.2--4.14 show the inside of each module. These figures are UML-inspired
   \item Dashed boxes outside a module frame are public interfaces of other modules, such as AuditApi, or external APIs and systems, such as the Controller API or the HR/Payroll API.
 \end{itemize}
 
-The component names below module level are our proposed decomposition. Table 4.3 stays the reference for module responsibilities, and Tables 4.7--4.19 under the figures only explain their components.
-
-\textbf{Names in the figures.} Names without spaces, such as GateTransactionProcessor, refer to the same parts as their spaced names in the text; each module's figure and table show any further decomposition.
+The components below module level are our proposed decomposition, so Table 4.3 is still the reference for what each module is responsible for; Tables 4.7--4.19 only explain the parts inside each figure. In the figures, component names are written without spaces (for example, GateTransactionProcessor is the Gate Transaction Processor of the text).
 
 \noindent\begin{minipage}{\linewidth}
 Figure 4.2 shows the inside of Gate Core, and Table 4.7 describes its components.
@@ -810,7 +802,7 @@ Guard Status Display & A fixed screen at the factory guard post. It reads the fa
 \phantomsection
 \addcontentsline{toc}{subsection}{4.2. Component-and-Connector View}
 
-The C\&C View shows TMC at runtime: which components handle each request, which interfaces they call, and which connectors link the factory application, the central application, and the external systems. It consists of a component diagram, three runtime flows, and the states that keep these flows safe.
+The Module View tells us how the code is divided, but not what happens when a scan arrives. The C\&C View looks at TMC at runtime instead: which component handles each request, which interfaces it calls, and how the factory application, the central application, and the external systems are connected. We start with the component diagram, then follow the three main flows, and end with the states that keep these flows safe.
 
 \subsubsection*{4.2.1. Component Diagram}
 
@@ -831,15 +823,9 @@ Figure 4.15 shows the runtime components of TMC and the connectors between them.
 \medskip
 
 \Needspace{6\baselineskip}
-Figure 4.15 has five groups of elements:
+The figure has five groups of elements. The clients come first: Station Client on the kiosk sends scans through GateCoreApi, Employee Portal and Back-office Portal serve employees and staff, and Guard Status Display on the guard screen reads the local HealthApi. The factory application holds Gate Core, Turnstile Integration, Gate Intervention, the factory part of Site Sync, and factory Monitoring. The central application holds Access \& Configuration, Attendance, Reporting, Payroll Handover, HR/Payroll Integration, Identity \& Access Control, Audit, and the central part of Site Sync. Central Monitoring runs on its own monitoring server (Table 5.1), outside both applications.
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Clients:} Station Client on the kiosk sends scans through GateCoreApi. Employee Portal and Back-office Portal are separate clients for employees and staff. Guard Status Display on the guard screen reads the local HealthApi.
-  \item \textbf{Factory application:} Gate Core, Turnstile Integration, Gate Intervention, the factory part of Site Sync, and factory Monitoring.
-  \item \textbf{Central application:} Access \& Configuration, Attendance, Reporting, Payroll Handover, HR/Payroll Integration, Identity \& Access Control, Audit, and the central part of Site Sync. Central Monitoring runs outside both applications, on the monitoring server listed in Table 5.1.
-  \item \textbf{Message broker:} carries three feeds with at-least-once delivery. Gate Event Feed takes scan events, transactions, assistance records, and ResolutionApplied from Gate Core to AttendanceApi. Access Change Feed takes versioned permissions, configuration, and verification keys from Access \& Configuration to Gate Core. Resolution Feed takes approved decisions linked to scans from Attendance Review to Gate Core.
-  \item \textbf{External systems:} the turnstile controller, reached by Turnstile Adapter through the Controller API (I-01), and HR/Payroll, reached by HR/Payroll Adapter through the HR/Payroll API (I-02).
-\end{itemize}
+Between the two sites, a message broker carries three feeds with at-least-once delivery. Gate Event Feed takes scan events, transactions, assistance records, and ResolutionApplied from Gate Core to AttendanceApi. Access Change Feed takes versioned permissions, configuration, and verification keys from Access \& Configuration to Gate Core. Resolution Feed takes approved decisions linked to scans from Attendance Review back to Gate Core. Finally, the two external systems are the turnstile controller, which Turnstile Adapter reaches through the Controller API (I-01), and HR/Payroll, which HR/Payroll Adapter reaches through the HR/Payroll API (I-02).
 
 We draw the components in UML. Balls and half-circle sockets are provided and required interfaces, and a connected pair is a synchronous call. Solid open arrows are asynchronous transfers; factory Monitoring forwards status and alerts to central Monitoring separately from the broker. Dashed open arrows summarize portal access and external-system calls. To keep the figure readable, it leaves out the HealthApi reports and AuditApi appends of source components, the handover scheduler, Reporting's AccessConfigApi call, and TMC email integration.
 
@@ -932,14 +918,15 @@ External system call & Adapters to the controller or HR/Payroll & Subject to ext
 \medskip
 
 \Needspace{6\baselineskip}
-Four points of the design are visible in Figure 4.15:
+Looking at Figure 4.15 as a whole, four properties of the design stand out.
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Short synchronous path.} Only Station Client, Gate Core, and Turnstile Adapter are on the path the kiosk waits for, and all of them are in the factory. Reporting, handover, and synchronization are outside this response path; shared-resource contention still needs limits and performance tests (AC-03). Once the confirmed opening is stored, passage recording and safe closure run independently of the kiosk result.
-  \item \textbf{Events between sites.} Business data between a factory and the central site moves only through the three feeds, so a WAN outage delays this data instead of stopping the QR flow, within the limits of I-10 (AC-01, AC-02). The exception is assisted and emergency opening, which waits synchronously for Identity \& RBAC at the central site (Table 3.2).
-  \item \textbf{One adapter per external system.} The controller and HR/Payroll are each reached through one adapter, so an API change stays inside that adapter (AC-06).
-  \item \textbf{Audit at the source.} Each source records audit evidence before sending it asynchronously to Audit Log, and Reporting checks authorization before calling AuditApi.query (AC-05). Chapter 7 covers what is audited and how long it is kept.
-\end{itemize}
+First, the path the kiosk waits for is short and stays inside the factory: only Station Client, Gate Core, and Turnstile Adapter are on it. Reporting, handover, and synchronization are outside this path, although shared resources such as the database still need limits and performance tests (AC-03). Once the confirmed opening is stored, passage recording and safe closure carry on independently of the kiosk result.
+
+Second, business data between a factory and the central site moves only through the three feeds. A WAN outage therefore delays this data rather than stopping the QR flow, within the limits of I-10 (AC-01, AC-02). Assisted and emergency opening are the exception, because they wait synchronously for Identity \& RBAC at the central site (Table 3.2).
+
+Third, each external system has exactly one adapter, so a change in the controller or HR/Payroll API stays inside that adapter (AC-06).
+
+Fourth, audit evidence is recorded at its source and then sent asynchronously to Audit Log, and Reporting checks authorization before it calls AuditApi.query (AC-05). Chapter 7 covers what is audited and how long it is kept.
 
 \clearpage
 \subsubsection*{4.2.2. Flow A: QR Scan, Opening, Passage and Closure}
@@ -961,32 +948,32 @@ Figure 4.16 shows the gate flow for one scan, from the kiosk to the safe closure
 \vspace{8pt}
 
 \Needspace{6\baselineskip}
-Solid arrows with filled heads are synchronous calls, solid open arrows are signals, and dashed open arrows are returns; PASSAGE and LANE\_CLEAR come from the controller through Turnstile Adapter as events, and CLOSED comes back as the result of closeGate. Four break fragments stop the flow on a duplicate request, a failed check or unusable access data, a failed acceptance write, and a deadline that expires before the opening command. The alt fragment separates OPENED, CONTROLLER ERROR, and UNDETERMINED, and only OPENED contains the par fragment for the kiosk result, passage, and closing. The circled numbers 1--9 match steps A1--A9:
+Solid arrows with filled heads are synchronous calls, solid open arrows are signals, and dashed open arrows are returns; PASSAGE and LANE\_CLEAR come from the controller through Turnstile Adapter as events, and CLOSED comes back as the result of closeGate. Four break fragments stop the flow on a duplicate request, a failed check or unusable access data, a failed acceptance write, and a deadline that expires before the opening command. The alt fragment separates OPENED, CONTROLLER ERROR, and UNDETERMINED, and only OPENED contains the par fragment for the kiosk result, passage, and closing. The circled numbers 1--9 in the figure match the steps below.
 
 \begin{itemize}[leftmargin=30pt, labelwidth=24pt, labelsep=6pt, align=left, itemsep=3pt, topsep=4pt, parsep=2pt]
-  \item[\textbf{A1}] \textbf{Station intake.} Station Client reads the QR code, records the start time, creates a scanId, and calls GateCoreApi.submitScan. Every later exchange about this scan keeps the same scanId.
-  \item[\textbf{A2}] \textbf{Duplicate check.} Gate Transaction Processor checks whether the scan already exists and, if so, returns the stored result or state. For a new scan, only one coordinator may issue the opening command, even when requests arrive at the same time.
-  \item[\textbf{A3}] \textbf{Access checks.} Access Decision verifies the QR code and its validity, then reads Eligibility Snapshot for employee status, factory permission, and lane configuration. It returns the decision, the reason, and the data version it used.
-  \item[\textbf{A4}] \textbf{Reserve the lane and store ACCEPTED.} If the checks pass, Gate Transaction Processor reserves the lane, claims the tokenId, and stores ACCEPTED in one transaction. If the lane already has an active or unresolved gate cycle, it returns LANE BUSY without claiming the token. If the write fails or the token is already claimed, no opening command is sent.
-  \item[\textbf{A5}] \textbf{Opening command.} Just before the command, Gate Transaction Processor recomputes how much of the scan deadline is left. If nothing is left, it sends no command: the scan becomes CANNOT PROCESS with reason \texttt{OPEN\_DEADLINE\_EXPIRED\_}\allowbreak\texttt{BEFORE\_COMMAND}, the lane is released, and the token stays claimed. Otherwise it calls openGate through IOpenGate with a commandId linked to the scan and a time limit of 700 ms or the remaining deadline, whichever is shorter (Table 5.5). A receipt from the controller does not mean the gate opened.
-  \item[\textbf{A6}] \textbf{Opening result.} On OPEN\_CONFIRMED, Gate Transaction Processor stores the OPENED state, the controller evidence, audit data, and an outbox event. An explicit non-execution is stored as CONTROLLER ERROR. An uncertain outcome is stored as UNDETERMINED first, and the lane and token stay reserved. Gate Core queries the same commandId once where supported and records a definite result. If the answer is still unclear or no query is supported, the scan moves to PENDING RECONCILIATION. The command is never resent to test it.
-  \item[\textbf{A7}] \textbf{Kiosk result.} Station Client shows the opening result, which ends the NFR-01 measurement. It does not tell the employee that attendance has been recorded.
+  \item[\textbf{A1}] Station Client reads the QR code, records the start time, creates a scanId, and calls GateCoreApi.submitScan. Every later message about this scan carries the same scanId.
+  \item[\textbf{A2}] Gate Transaction Processor checks whether it has seen this scanId before. If it has, it simply returns the stored result or state. For a new scan, only one coordinator may issue the opening command, even if two requests arrive at the same time.
+  \item[\textbf{A3}] Access Decision verifies the QR code and its validity, then reads Eligibility Snapshot for the employee's status, factory permission, and lane configuration. It returns the decision, the reason, and the data version it used.
+  \item[\textbf{A4}] If the checks pass, Gate Transaction Processor reserves the lane, claims the tokenId, and stores ACCEPTED, all in one transaction. A lane that still has an active or unresolved gate cycle gets LANE BUSY, and the token is left unclaimed. If the write fails or the token was already claimed, the flow stops here and no opening command goes out.
+  \item[\textbf{A5}] Right before sending the command, Gate Transaction Processor recomputes how much of the scan deadline is left. If nothing is left, the scan becomes CANNOT PROCESS with reason \texttt{OPEN\_DEADLINE\_EXPIRED\_}\allowbreak\texttt{BEFORE\_COMMAND}; the lane is released but the token stays claimed. Otherwise it calls openGate through IOpenGate with a commandId linked to the scan and a time limit of 700 ms or the remaining deadline, whichever is shorter (Table 5.5). Note that the controller receiving the command is not the same as the gate opening.
+  \item[\textbf{A6}] On OPEN\_CONFIRMED, Gate Transaction Processor stores the OPENED state together with the controller evidence, audit data, and an outbox event. If the controller explicitly reports that it did not execute, the scan is stored as CONTROLLER ERROR. Anything less certain is stored as UNDETERMINED, and the lane and token stay reserved while Gate Core queries the same commandId once (where the controller supports it). If that still gives no clear answer, the scan moves to PENDING RECONCILIATION instead of resending the command.
+  \item[\textbf{A7}] Station Client shows the opening result, which is where the NFR-01 measurement ends. The kiosk only reports the opening; it does not tell the employee that attendance has been recorded.
   \Needspace{5\baselineskip}
-  \item[\textbf{A8}] \textbf{Passage and attendance.} For the first reliable passage linked to a QR scan's command and lane and received within the observation window while the scan is still OPENED (not already sent to reconciliation, for example by an emergency release), Gate Transaction Processor stores that event with at most one original attendance transaction per scanId (employee, Vietnam time, direction, factory, lane, source), audit data, and an outbox event in one write. Site Sync later sends the event to Attendance. A repeated event is ignored, and a second, different passage for the same scan is flagged for review. Without reliable passage evidence, the opening stays recorded and the case goes to reconciliation. If PASSAGE only arrives after the 15-second observation has ended (NO\_PASSAGE), Gate Core stores it once with an audit record and marks it LATE\_PASSAGE, but creates no attendance transaction; Attendance Review decides the case.
-  \item[\textbf{A9}] \textbf{Safe closure.} When the controller reports LANE\_CLEAR, Gate Transaction Processor sends closeGate once, whether passage was recorded or not, and stores CLOSED only after the controller confirms it. It stores CLOSE\_SENT and the closeCommandId before sending, so a repeated LANE\_CLEAR only checks that command and never creates a second one. If LANE\_CLEAR or CLOSED is not confirmed, it alerts the guard and keeps the lane reserved until one of the safe-release conditions below is met; attendance backed by a passage event stays recorded.
+  \item[\textbf{A8}] Attendance comes from passage, not from the opening. Gate Core waits for the first reliable PASSAGE linked to this command and lane, within the 15-second observation window. If it arrives while the scan is still OPENED (for example, not already sent to reconciliation by an emergency release), Gate Transaction Processor stores the passage event, at most one original attendance transaction for the scanId (employee, Vietnam time, direction, factory, lane, source), audit data, and an outbox event in one write. Site Sync later sends the event to Attendance. A repeated event is ignored, and a second, different passage for the same scan is flagged for review. If no reliable passage arrives, the opening stays recorded and the case goes to reconciliation. A PASSAGE that arrives after the window has closed (NO\_PASSAGE) is stored once with an audit record and marked LATE\_PASSAGE, but it creates no attendance; Attendance Review decides the case.
+  \item[\textbf{A9}] When the controller reports LANE\_CLEAR, Gate Transaction Processor sends closeGate once, whether or not passage was recorded, and stores CLOSED only when the controller confirms it. Because CLOSE\_SENT and the closeCommandId are stored before sending, a repeated LANE\_CLEAR just checks that existing command. If LANE\_CLEAR or CLOSED does not arrive, Gate Core alerts the guard and keeps the lane reserved until one of the safe-release conditions below is met. Attendance that is already backed by a passage event is kept.
 \end{itemize}
 
-Under I-09, each QR code is valid for 60 seconds at one factory and can be claimed by only one ACCEPTED scan.
+As a reminder, under I-09 each QR code is valid for 60 seconds at one factory and can be claimed by only one ACCEPTED scan.
 
 \Needspace{6\baselineskip}
-\textbf{Lane rules.} Duplicate checks on scanId do not stop two employees from scanning at the same lane, so each lane follows these rules:
+\textbf{Lane rules.} Checking duplicates on scanId is not enough when two different employees scan at the same lane, so each lane also follows these rules:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item A lane has at most one active normal gate cycle, from ACCEPTED until the lane is released.
   \item Reserving the lane, claiming the token, and storing ACCEPTED happen in one atomic write, for example under a unique constraint on the lane's active cycle. A separate check-then-reserve step would let two scans pass together.
   \item If the lane is busy, Gate Core claims no token, sends no openGate, and returns LANE BUSY.
   \item Resending the same scanId returns the stored result. Scanning again after the lane is free creates a new scanId; the same QR code works only if it is unclaimed and still valid.
-  \item If a deadline expires before any opening command is sent, Gate Core records CANNOT PROCESS and releases the unused lane reservation, keeping the token claim. Once a command may have been sent, release requires confirmed CLOSED, explicit non-execution with the lane ready, or restoration by a guard. A timeout or the end of the passage observation alone never releases that lane.
+  \item If a deadline expires before any opening command is sent, Gate Core records CANNOT PROCESS and releases the unused lane reservation, keeping the token claim. Once a command may have been sent, release requires confirmed CLOSED, explicit non-execution with the lane ready, or restoration by a guard. A timeout or the end of the passage window is not enough to release that lane.
 \end{itemize}
 
 Because a lane stays reserved for the whole cycle, the number of lanes must be checked against the peak load. A fast LANE BUSY answer proves neither a successful opening within 2 seconds nor enough lane capacity; the lane count is confirmed in the site survey.
@@ -1046,21 +1033,21 @@ A result counts as ``controller confirms nonexecution'' only when the response s
 \addcontentsline{toc}{subsubsection}{4.2.3. Flow B: Assisted Access and Emergency Opening}
 
 
-This flow covers employees who cannot finish the QR flow and the emergency release of a lane. Recording a request for assistance does not create attendance, and every assistance case needs HR approval (I-04). Employees without a QR code start at B2.
+Not every employee gets through the gate with a QR code. Some scans end without a usable result, some employees have no QR code with them, and in an emergency a guard may need to release a lane. Flow B covers these cases. The key point is that recording an assistance request does not create attendance; every assistance case needs HR approval first (I-04). Employees without a QR code start at B2.
 
 \begin{itemize}[leftmargin=30pt, labelwidth=24pt, labelsep=6pt, align=left, itemsep=3pt, topsep=4pt, parsep=2pt]
-  \item[\textbf{B1}] \textbf{Check the automated result.} If Gate Transaction Processor knows that no command was sent and processing cannot continue, the station shows CANNOT PROCESS; if the station only timed out, it shows UNDETERMINED.
-  \item[\textbf{B2}] \textbf{Verify and prepare.} The guard checks the employee's identity and current eligibility for the factory, then records the employee, actual time, direction, factory, reason, and evidence. A blocked employee, or one whose eligibility cannot be verified, does not get an ordinary assisted opening; a real safety case follows a separate TMC procedure. If the case comes from a scan, it is linked to that scan.
-  \item[\textbf{B3}] \textbf{Authorize intake.} Back-office Portal calls GateInterventionApi.recordAssistedAccess. Gate Intervention checks authorization through Identity \& RBAC and assigns a supportCaseId, which stays the same if the case is resubmitted.
-  \item[\textbf{B4}] \textbf{Record the case.} Gate Intervention calls GateCoreApi.recordIntervention. Gate Transaction Processor stores the case, audit evidence, and an outbox event, then confirms intake.
-  \item[\textbf{B5}] \textbf{Send to Attendance Review.} Site Sync carries the event over Gate Event Feed to AttendanceApi. Attendance Review ignores duplicates and opens the case for review.
-  \item[\textbf{B6}] \textbf{Approve.} HR staff approve every assistance case (I-04); other reconciliation cases are decided by authorized users. Attendance Review stores the decision with its ID, version, evidence, approver, and time. An unapproved case never creates attendance.
-  \item[\textbf{B7}] \textbf{Apply to attendance.} Attendance Review asks Attendance Consolidation to apply the decision. It creates a transaction with an assistance or reconciliation source if none exists, or links the decision to the existing one.
-  \item[\textbf{B8}] \textbf{Update the scan.} If the case is linked to a scan that Gate Core must update, Attendance Review sends the decision over Resolution Feed. Gate Core stores the conclusion and returns ResolutionApplied over Gate Event Feed, and only then is this part of the case complete. Applying the decision to attendance (B7) is tracked separately, and a case without such a scan link does not wait for ResolutionApplied.
+  \item[\textbf{B1}] If Gate Transaction Processor knows that no command was sent and processing cannot continue, the station shows CANNOT PROCESS; if the station only timed out, it shows UNDETERMINED.
+  \item[\textbf{B2}] The guard checks the employee's identity and current eligibility for the factory, then records the employee, actual time, direction, factory, reason, and evidence. A blocked employee, or one whose eligibility cannot be verified, does not get an ordinary assisted opening; a real safety case follows a separate TMC procedure. If the case comes from a scan, it is linked to that scan.
+  \item[\textbf{B3}] Back-office Portal calls GateInterventionApi.recordAssistedAccess. Gate Intervention checks authorization through Identity \& RBAC and assigns a supportCaseId, which stays the same if the case is resubmitted.
+  \item[\textbf{B4}] Gate Intervention calls GateCoreApi.recordIntervention. Gate Transaction Processor stores the case, audit evidence, and an outbox event, then confirms intake.
+  \item[\textbf{B5}] Site Sync carries the event over Gate Event Feed to AttendanceApi. Attendance Review ignores duplicates and opens the case for review.
+  \item[\textbf{B6}] HR staff approve every assistance case (I-04); other reconciliation cases are decided by authorized users. Attendance Review stores the decision with its ID, version, evidence, approver, and time. An unapproved case never creates attendance.
+  \item[\textbf{B7}] Attendance Review asks Attendance Consolidation to apply the decision. It creates a transaction with an assistance or reconciliation source if none exists, or links the decision to the existing one.
+  \item[\textbf{B8}] If the case is linked to a scan that Gate Core must update, Attendance Review sends the decision over Resolution Feed. Gate Core stores the conclusion and returns ResolutionApplied over Gate Event Feed, and only then is this part of the case complete. Applying the decision to attendance (B7) is tracked separately, and a case without such a scan link does not wait for ResolutionApplied.
 \end{itemize}
 
 \Needspace{6\baselineskip}
-Gate opening and intake during outages follow these rules; HR approval in B6 is required for attendance, not for an otherwise authorized assisted opening after B4:
+Steps B1--B8 are about the attendance record. The physical gate is handled separately: an authorized guard can open it for an employee right after B4, without waiting for HR, because HR approval in B6 only decides attendance. Three rules cover the gate side and the case where the system itself is down:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{Assisted gate opening.} Once the guard is authorized, eligibility is verified, and B4 has stored the case, Gate Intervention calls GateCoreApi.requestAssistedOpen for the supportCaseId and a free lane, reserved under the same lane rules as the QR flow. Gate Core stores a commandId before calling openGate and records the outcome with the case. The call uses the assisted-opening time limit in Table 5.5, not the 700 ms budget of the QR flow, because no kiosk is waiting. A repeated request returns the existing command status, and an uncertain outcome is inquired or reconciled, never retried blindly. Passage and closing follow the same rules as the QR flow. Passage evidence supports the HR decision, but attendance is only created in B6--B7. This flow uses ordinary openGate, not emergencyRelease.
@@ -1074,35 +1061,37 @@ Gate opening and intake during outages follow these rules; HR approval in B6 is 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{4.2.4. Flow C: HR/Payroll Handover}
 
-Flow C hands over one period of attendance data, from preparing the batch to recording the HR/Payroll outcome. In Figure 4.17, an alt fragment separates the three batch outcomes in Table 4.25, and an opt fragment shows a supplementary batch after a late adjustment. The circled numbers 1--9 match steps C1--C9; solid arrows with filled heads are synchronous calls, and dashed open arrows are returns.
+Flow C is the monthly handover to HR/Payroll. Unlike Flows A and B, nobody is waiting at a gate, but the deadline in IC-01 is fixed, so the design focuses on not losing or duplicating a batch. The flow covers one period, from preparing the batch to recording the HR/Payroll outcome. In Figure 4.17, an alt fragment separates the three batch outcomes in Table 4.25, and an opt fragment shows a supplementary batch after a late adjustment. The circled numbers 1--9 match steps C1--C9; solid arrows with filled heads are synchronous calls, and dashed open arrows are returns.
 
-
-\Needspace{6\baselineskip}
-The handover of one period runs in nine steps:
-
-\begin{itemize}[leftmargin=30pt, labelwidth=24pt, labelsep=6pt, align=left, itemsep=3pt, topsep=4pt, parsep=2pt]
-  \item[\textbf{C1}] \textbf{Start the period.} A timer or an authorized user calls PayrollHandoverApi, and Payroll Handover fixes the period and data scope.
-  \item[\textbf{C2}] \textbf{Collect data.} Payroll Handover reads attendance data, its version, and the intake progress of each source through AttendanceApi. Records are assigned to a period by business time, not by when they arrived.
-  \item[\textbf{C3}] \textbf{Check open cases.} Payroll Handover reads open cases and decision states from Attendance Review, and HR staff handle exceptions within their authority.
-  \item[\textbf{C4}] \textbf{Prepare the batch.} Payroll Handover fixes the data version, assigns a batchId, and stores the batch content. Missing mandatory data is shown in the period progress.
-  \item[\textbf{C5}] \textbf{Submit.} Payroll Handover calls IPayrollSubmission, and HR/Payroll Adapter converts and sends the data.
-  \item[\textbf{C6}] \textbf{Record the outcome.} Payroll Handover stores the outcome with audit evidence as CONFIRMED, REJECTED, or UNDETERMINED, as defined in Table 4.25.
-  \item[\textbf{C7}] \textbf{Handle errors.} Payroll Handover queries the status if the API allows it and stores a definite answer as CONFIRMED or REJECTED. If the outcome is still unknown, including when no status query is supported, it resubmits only when the contract prevents duplicates or evidence shows that resending is safe; otherwise it raises an alert.
-  \item[\textbf{C8}] \textbf{Late adjustments.} An adjustment approved after handover is first applied by Attendance Consolidation, then sent in a supplementary batch linked to the earlier one, under the same rules.
-  \item[\textbf{C9}] \textbf{Check the whole period.} Payroll Handover compares the mandatory data with the CONFIRMED batches, and Monitoring alerts on any missing or undetermined part that puts the deadline at risk.
-\end{itemize}
 
 \noindent\begin{minipage}{\linewidth}
 \setlength{\parskip}{0pt}
 \setstretch{1}
-Figure 4.17 shows the handover of one period.
-\par\vspace{6pt}
 \centering
 \IfFileExists{diagram/sequence/figure-4-17-payroll-handover.png}{\includegraphics[width=450.0pt,height=630.0pt,keepaspectratio]{diagram/sequence/figure-4-17-payroll-handover.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
 \par\vspace{4pt}
 \textbf{Figure 4.17. Payroll Handover Sequence --- Preparation, Submission, Outcome and Supplementary Batch}\par
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.17}Payroll Handover Sequence --- Preparation, Submission, Outcome and Supplementary Batch}
 \end{minipage}
+
+\medskip
+
+\Needspace{6\baselineskip}
+The handover of one period runs in nine steps:
+
+\begin{itemize}[leftmargin=30pt, labelwidth=24pt, labelsep=6pt, align=left, itemsep=3pt, topsep=4pt, parsep=2pt]
+  \item[\textbf{C1}] A timer or an authorized user calls PayrollHandoverApi, and Payroll Handover fixes the period and data scope.
+  \item[\textbf{C2}] Payroll Handover reads attendance data, its version, and the intake progress of each source through AttendanceApi. Records are assigned to a period by business time, not by when they arrived.
+  \item[\textbf{C3}] Payroll Handover reads open cases and decision states from Attendance Review, and HR staff handle exceptions within their authority.
+  \item[\textbf{C4}] Payroll Handover fixes the data version, assigns a batchId, and stores the batch content. Missing mandatory data is shown in the period progress.
+  \item[\textbf{C5}] Payroll Handover calls IPayrollSubmission, and HR/Payroll Adapter converts and sends the data.
+  \item[\textbf{C6}] Payroll Handover stores the outcome with audit evidence as CONFIRMED, REJECTED, or UNDETERMINED, as defined in Table 4.25.
+  \item[\textbf{C7}] Payroll Handover queries the status if the API allows it and stores a definite answer as CONFIRMED or REJECTED. If the outcome is still unknown, including when no status query is supported, it resubmits only when the contract prevents duplicates or evidence shows that resending is safe; otherwise it raises an alert.
+  \item[\textbf{C8}] An adjustment approved after handover is first applied by Attendance Consolidation, then sent in a supplementary batch linked to the earlier one, under the same rules.
+  \item[\textbf{C9}] Payroll Handover compares the mandatory data with the CONFIRMED batches, and Monitoring alerts on any missing or undetermined part that puts the deadline at risk.
+\end{itemize}
+
+
 
 \medskip
 
@@ -1123,10 +1112,10 @@ The period follows these rules:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{4.2.5. States and Duplicate Prevention}
 
-The three flows rely on stored states and identifiers. NFR-02 covers only normal operation; component failures are assessed separately.
+All three flows above can be interrupted at almost any point: a timeout, a lost message, or a restart. What keeps them safe is that every important step is stored as a state, and every message carries an identifier that lets the receiver spot a repeat. This section collects those states and identifiers in one place. Note that NFR-02 only covers normal operation; component failures are assessed separately.
 
 \Needspace{6\baselineskip}
-Table 4.23a follows a scan up to the opening result, and Table 4.23b follows the passage and closing cycle, linked by scanId, commandId, and lane. OPEN\_CONFIRMED and CLOSED are command results; PASSAGE and LANE\_CLEAR are events. The table values are stored states. OPENED means that Gate Core has stored OPEN\_CONFIRMED.
+We split the gate states into two tables. Table 4.23a follows a scan up to the opening result, and Table 4.23b follows the passage and closing cycle after it; the two are linked by scanId, commandId, and lane. All values in the tables are stored states. OPEN\_CONFIRMED and CLOSED are command results, PASSAGE and LANE\_CLEAR are events, and OPENED simply means that Gate Core has stored OPEN\_CONFIRMED.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{106.5pt}|>{\raggedright\arraybackslash}p{109.5pt}|>{\raggedright\arraybackslash}p{173.5pt}|}
 \hline
@@ -1194,7 +1183,7 @@ Emergency & EMERGENCY\_HOLD & Block normal closing and new scans on the lane unt
 
 
 \Needspace{6\baselineskip}
-A few rules connect these states:
+The states alone do not say in which order things happen or what happens after a crash, so a few more rules tie them together:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{Order.} Up to the stored opening result there is one sequence: check conditions; atomically reserve the lane, claim the token, and store ACCEPTED; send the opening command; store the outcome. Once the confirmed opening is stored, returning the kiosk result, recording passage, and closing safely run independently, each on its own signal: closing never waits for passage, and attendance never waits for closing or for the kiosk.
@@ -1276,18 +1265,11 @@ UNDETERMINED & A timeout, or a response without enough receipt evidence. & Inqui
 \addcontentsline{toc}{subsection}{4.3. Class Responsibilities for the Gate Flow}
 
 
-The proposed classes for the gate flow keep the scan, the controller command, the gate cycle, the passage evidence, and the attendance transaction apart:
+Sections 4.1 and 4.2 stop at the level of components. For Gate Core, which is the module we implemented in Task 2, we go one level further and show the classes. The main idea at this level is to keep five things apart that are easy to mix up: the scan (ScanAttempt), the controller command (GateCommand), the gate cycle of a lane (GateCycle), the passage evidence (PassageEvent), and the attendance transaction (AttendanceTransaction). A GateCycle holds the passage and closure states, the 15-second observation deadline, the lane-clear signal, and the close command, and a lane counts as busy while it has an active or unresolved cycle. A PassageEvent is always stored before its AttendanceTransaction, and the data model allows at most one original transaction per scanId and accepts each passageEventId once.
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{StationClient} is the kiosk client in the target design; it submits scans through IScanSubmission. Task 2 implements that HTTP entry point but does not include the kiosk UI.
-  \item \textbf{GateTransactionProcessor} checks the existing ScanAttempt, asks AccessDecision to evaluate the QR code against EligibilitySnapshot, and stores the ACCEPTED attempt, its TokenReservation, and a new GateCycle for the lane in one transaction before calling the controller port.
-  \item \textbf{GateCommand} carries a commandId linked to its scan or support case and lane.
-  \item The \textbf{TurnstileAdapter} role in the target design handles the controller integration. In Task 2, SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the command ports (IOpenGate, ICloseGate, IEmergencyGate), while controller signals enter through HTTP routes that call IPassageEvents. A receipt stays internal to the adapter. For openGate, the final outcome is OPEN\_CONFIRMED, CONTROLLER ERROR (confirmed non-execution), or UNDETERMINED.
-  \item \textbf{GateCycle} holds the passage and closure states, the 15-second observation deadline, the lane-clear signal, and the close command. While a lane has an active or unresolved GateCycle, the lane is busy.
-  \item \textbf{PassageEvent} is stored before \textbf{AttendanceTransaction} is created. The data model allows at most one original transaction per scanId and accepts each passageEventId once.
-\end{itemize}
+Unlike the rest of the chapter, the class diagrams below are drawn from the Task 2 code (Chapter 9), so the names are the ones in \code{src/tmc_gate}. Two parts of the target design appear under different names there. The kiosk (Station Client) is not built; Task 2 only provides its HTTP entry point, which submits scans through IScanSubmission. The Turnstile Adapter role is played by SimulatedTurnstileAdapter and FaultyTurnstileAdapter, which implement the command ports IOpenGate, ICloseGate, and IEmergencyGate, while controller signals come in through HTTP routes that call IPassageEvents. For openGate the adapter keeps a receipt to itself and only returns OPEN\_CONFIRMED, CONTROLLER ERROR (confirmed non-execution), or UNDETERMINED.
 
-The class diagrams below are drawn from the Task 2 code (Chapter 9), so the names are the ones in \code{src/tmc_gate}. In all three figures a solid arrow means that a class uses another one, a dashed arrow with a hollow triangle means that it implements an interface, a solid line with a hollow triangle means that an interface extends another one, and interface names are in italics. Only the operations needed to follow the flow are shown.
+All three figures use the same notation: a solid arrow means that a class uses another one, a dashed arrow with a hollow triangle means that it implements an interface, a solid line with a hollow triangle means that an interface extends another one, and interface names are in italics. To keep the figures readable, we only show the operations needed to follow the flow.
 
 \Needspace{12\baselineskip}
 \subsubsection*{4.3.1. Scan Flow}
@@ -1306,9 +1288,20 @@ The class diagrams below are drawn from the Task 2 code (Chapter 9), so the name
 
 \vspace{10pt}
 
-Figure 4.18 shows the classes behind a QR scan (Flow A). The kiosk route in the \code{gate_controller} router only knows IScanSubmission. GateCoreFacade implements it through GateCoreApi and hands the scan to GateTransactionProcessor, which is the only class that coordinates the flow. The processor asks AccessDecision for the decision, and AccessDecision reads the EligibilitySnapshot through ISnapshotRepository. Every other dependency of the processor is an interface: IScanRepository and IUnitOfWork for the transaction, IOpenGate and IControllerStatusQuery for the controller, and IAuditApi for audit evidence. All of them are passed in through the constructor in \code{app.py}.
+Figure 4.18 shows the classes behind a QR scan (Flow A). The kiosk route in the \code{gate_controller} router only knows IScanSubmission. GateCoreFacade implements it through GateCoreApi and passes the scan to GateTransactionProcessor, which is the only class that coordinates the flow. Apart from AccessDecision, every dependency of the processor is an interface: IScanRepository and IUnitOfWork for the transaction, IOpenGate and IControllerStatusQuery for the controller, and IAuditApi for audit evidence. All of them are passed in through the constructor in \code{app.py}, so the tests can swap in fakes.
 
-The two budgets in the processor come from Table 5.5: the whole scan must finish within 2 seconds, and openGate gets at most 700 ms of that time. The processor stores the ACCEPTED scan, its TokenReservation, and the new GateCycle in one transaction before it sends openGate, so a crash after the command still leaves evidence that the lane is taken.
+The processor's \code{processScan} method follows steps A2--A7 of Flow A:
+
+\begin{enumerate}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item It starts one time budget for the whole scan (2 seconds, Table 5.5). Every later step only gets the time that is left.
+  \item Inside IUnitOfWork, it looks up the scanId in IScanRepository. If the scan already exists, it returns the stored result, so a kiosk retry is harmless.
+  \item It asks AccessDecision to evaluate the QR token for the lane. AccessDecision reads the EligibilitySnapshot through ISnapshotRepository and also reports the operating mode. If the scan is not allowed, the processor stores it as REJECTED, or as CANNOT\_PROCESS when the snapshot cannot be used, together with an audit record.
+  \item In one transaction it reserves the lane, claims the token, and stores the ACCEPTED scan, its TokenReservation, and a new GateCycle. If the lane is taken or the token was already claimed, it returns LANE\_BUSY or a rejection and sends nothing to the controller.
+  \item It checks the budget again. If nothing is left, it stores CANNOT\_PROCESS with \texttt{OPEN\_DEADLINE\_EXPIRED\_}\allowbreak\texttt{BEFORE\_COMMAND} and releases the lane, while the token stays claimed.
+  \item Outside the transaction, it calls IOpenGate.openGate with a limit of 700 ms or the remaining budget, whichever is shorter. OPEN\_CONFIRMED is stored as OPENED and starts the 15-second passage window; CONTROLLER\_ERROR releases the lane; UNDETERMINED is stored first, then IControllerStatusQuery is asked once, and a result that is still unclear becomes PENDING\_RECONCILIATION.
+\end{enumerate}
+
+Because step 4 commits before step 6 sends the command, a crash right after openGate still leaves evidence in the database that the lane is taken.
 
 \Needspace{12\baselineskip}
 \subsubsection*{4.3.2. Controller Signals and Gate Intervention}
@@ -1318,7 +1311,7 @@ The two budgets in the processor come from Table 5.5: the whole scan must finish
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\IfFileExists{diagram/class/figure-4-19-signals-intervention-classes.png}{\includegraphics[width=\linewidth,height=420pt,keepaspectratio]{diagram/class/figure-4-19-signals-intervention-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+\IfFileExists{diagram/class/figure-4-19-signals-intervention-classes.png}{\includegraphics[width=\linewidth,height=600pt,keepaspectratio]{diagram/class/figure-4-19-signals-intervention-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
 
 \vspace{6pt}
 \textbf{Figure 4.19. Class Diagram of Controller Signals and Gate Intervention}
@@ -1327,9 +1320,9 @@ The two budgets in the processor come from Table 5.5: the whole scan must finish
 
 \vspace{10pt}
 
-Figure 4.19 shows the other ways into Gate Core. PASSAGE and LANE\_CLEAR from the controller arrive at \code{gate_controller} and go to GateTransactionProcessor through IPassageEvents. PassageTimeoutWorker calls sweepPassageTimeouts every 0.25 seconds. The processor then uses IPassageWindowQuery to find the cycles whose 15-second window has ended. This timer never sends closeGate.
+Besides the scan itself, Gate Core has two other ways in, and Figure 4.19 shows both. The first is the controller. PASSAGE and LANE\_CLEAR from the controller arrive at \code{gate_controller} and go to GateTransactionProcessor through IPassageEvents. PassageTimeoutWorker calls sweepPassageTimeouts every 0.25 seconds. The processor then uses IPassageWindowQuery to find the cycles whose 15-second window has ended. The timer only marks a missing passage for review; closing the gate still waits for LANE\_CLEAR.
 
-Guard actions (Flow B) take a separate path. \code{intervention_controller} gets the guard from the session through IGuardIdentityApi, and InterventionService checks the guard's authority through IAuthorizationApi before it calls Gate Core. InterventionService only sees IInterventionRequest, not the whole GateCoreApi, which is the ISP split of Section 7.1. The turnstile ports are also split: one adapter class implements ITurnstileControl, but the processor depends on IOpenGate, ICloseGate, and IEmergencyGate one by one. FaultyTurnstileAdapter is a second implementation that the contract tests use to check the LSP rule (Section 9.4).
+The second way in is guard actions from Flow B, which take a separate path. \code{intervention_controller} gets the guard from the session through IGuardIdentityApi, and InterventionService checks the guard's authority through IAuthorizationApi before it calls Gate Core. InterventionService only sees IInterventionRequest, not the whole GateCoreApi, which is the ISP split of Section 7.1. The turnstile ports are also split: one adapter class implements ITurnstileControl, but the processor depends on IOpenGate, ICloseGate, and IEmergencyGate one by one. FaultyTurnstileAdapter is a second implementation that the contract tests use to check the LSP rule (Section 9.4).
 
 \Needspace{12\baselineskip}
 \subsubsection*{4.3.3. Gate Core Entities}
@@ -1348,7 +1341,7 @@ Guard actions (Flow B) take a separate path. \code{intervention_controller} gets
 
 \vspace{10pt}
 
-Figure 4.20 shows the entities and their multiplicities, including the rule that a Lane has at most one active GateCycle. The active association is optional at both ends: a released cycle keeps its laneId as history but is no longer the lane's active cycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
+Figure 4.20 shows the data that Gate Core keeps and how many of each entity can be linked. The most important multiplicity is that a Lane has at most one active GateCycle. The active association is optional at both ends: a released cycle keeps its laneId as history but is no longer the lane's active cycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
 
 Table 4.26 lists the enumerations that appear as attribute types in Figures 4.18 to 4.20. The values are the ones in \code{src/tmc_gate/domain/enums.py}.
 
