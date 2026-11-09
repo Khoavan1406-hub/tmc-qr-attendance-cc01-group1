@@ -1279,10 +1279,10 @@ UNDETERMINED & A timeout, or a response without enough receipt evidence. & Inqui
 The proposed classes for the gate flow keep the scan, the controller command, the gate cycle, the passage evidence, and the attendance transaction apart:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{StationClient} submits a scan through GateCoreApi.
+  \item \textbf{StationClient} is the kiosk client in the target design; it submits scans through IScanSubmission. Task 2 implements that HTTP entry point but does not include the kiosk UI.
   \item \textbf{GateTransactionProcessor} checks the existing ScanAttempt, asks AccessDecision to evaluate the QR code against EligibilitySnapshot, and stores the ACCEPTED attempt, its TokenReservation, and a new GateCycle for the lane in one transaction before calling the controller port.
   \item \textbf{GateCommand} carries a commandId linked to its scan or support case and lane.
-  \item The \textbf{TurnstileAdapter} class implements the turnstile command ports (IOpenGate, ICloseGate, IEmergencyGate) and reports PASSAGE and LANE\_CLEAR through IPassageEvents. A receipt stays internal to the adapter. For openGate, the final outcome is OPEN\_CONFIRMED, CONTROLLER ERROR (confirmed non-execution), or UNDETERMINED.
+  \item The \textbf{TurnstileAdapter} role in the target design handles the controller integration. In Task 2, SimulatedTurnstileAdapter and FaultyTurnstileAdapter implement the command ports (IOpenGate, ICloseGate, IEmergencyGate), while controller signals enter through HTTP routes that call IPassageEvents. A receipt stays internal to the adapter. For openGate, the final outcome is OPEN\_CONFIRMED, CONTROLLER ERROR (confirmed non-execution), or UNDETERMINED.
   \item \textbf{GateCycle} holds the passage and closure states, the 15-second observation deadline, the lane-clear signal, and the close command. While a lane has an active or unresolved GateCycle, the lane is busy.
   \item \textbf{PassageEvent} is stored before \textbf{AttendanceTransaction} is created. The data model allows at most one original transaction per scanId and accepts each passageEventId once.
 \end{itemize}
@@ -1300,7 +1300,7 @@ The class diagrams below are drawn from the Task 2 code (Chapter 9), so the name
 \IfFileExists{diagram/class/figure-4-18-scan-flow-classes.png}{\includegraphics[width=\linewidth,height=330pt,keepaspectratio]{diagram/class/figure-4-18-scan-flow-classes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
 
 \vspace{6pt}
-\textbf{Figure 4.18. Class Diagram of the Scan Flow}
+\textbf{Figure 4.18. Class Diagram of the Scan Flow (as implemented in Task 2)}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{4.18}Class Diagram of the Scan Flow}
 \end{minipage}
 
@@ -1348,7 +1348,7 @@ Guard actions (Flow B) take a separate path. \code{intervention_controller} gets
 
 \vspace{10pt}
 
-Figure 4.20 shows the entities and their multiplicities, including the rule that a Lane has at most one active GateCycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
+Figure 4.20 shows the entities and their multiplicities, including the rule that a Lane has at most one active GateCycle. The active association is optional at both ends: a released cycle keeps its laneId as history but is no longer the lane's active cycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
 
 Table 4.26 lists the enumerations that appear as attribute types in Figures 4.18 to 4.20. The values are the ones in \code{src/tmc_gate/domain/enums.py}.
 

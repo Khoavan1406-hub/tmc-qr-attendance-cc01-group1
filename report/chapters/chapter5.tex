@@ -502,7 +502,7 @@ Each token is valid at only one factory, and all lanes in that factory share Gat
 \textbf{Time during a WAN outage.} The factory application server is the time source for the kiosks and synchronizes with the time used for QR issuance and checkpoints at the central site. What matters is the error against that central time; factory clocks that agree with each other can still all be wrong. Gate Core keeps an error bound: the error measured at the last successful synchronization plus the drift allowed since then, using a drift rate measured for the server in testing. The bound grows while the WAN is down. Gate Core continues QR checks only while the bound is known and below 2 seconds, and stops automatic acceptance when it cannot establish the bound or the bound reaches or exceeds the limit (Table 5.5). The central issuing service follows the same rule for its own clock.
 
 
-\textbf{Effectiveness of access-right revocation.} Once a factory receives and applies a change, new scans use the updated version. During isolation, the factory may not know that a right has just been revoked at the central site, and in degraded mode this delay can reach 30 minutes. The DEGRADED flag makes every scan in that window easy to find and check later, but it cannot undo an entry that has already happened. If TMC needs immediate revocation, the scans that need that guarantee must check online or stop when the connection is down. The system cannot rely on a disconnected copy and also know every central change at once.
+\textbf{Effectiveness of access-right revocation.} Once a factory receives and applies a change, new scans use the updated version. During isolation, the factory may not know that a right has just been revoked at the central site. Automatic acceptance using the old rights is allowed only while the last confirmed watermark is less than 30 minutes old. The revocation itself may arrive later, after reconnection; 30 minutes is not a delivery guarantee. The DEGRADED flag makes every scan in that window easy to find and check later, but it cannot undo an entry that has already happened. If TMC needs immediate revocation, the scans that need that guarantee must check online or stop when the connection is down. The system cannot rely on a disconnected copy and also know every central change at once.
 
 \subsubsection*{5.7.3. Loss of Central Connectivity or Broker Availability}
 
@@ -602,7 +602,7 @@ A2. Each kiosk decides on its own with a local cache & A kiosk keeps working eve
 \hline
 A3. Factory server decides, with no limit on data age & Gates keep working for as long as the factory itself works. & A revocation made at the central site could be ignored for hours or days without anyone noticing. \\*
 \hline\noalign{\nobreak}
-A4. Factory server decides, with an outbox and a bounded degraded mode (chosen) & The scan only needs the factory LAN, all lanes share one token-claim store, and the age of access data has a hard limit. & A revocation during an outage can take up to 30 minutes to reach the factory, and guards need a manual procedure after that. \\
+A4. Factory server decides, with an outbox and a bounded degraded mode (chosen) & The scan only needs the factory LAN, all lanes share one token-claim store, and the age of access data has a hard limit. & A revocation may remain unknown while the factory is isolated. Automatic acceptance stops when the last confirmed watermark reaches 30 minutes; delivery of the revocation waits for reconnection. \\
 \hline
 \end{longtable}
 
@@ -612,7 +612,7 @@ We chose A4 because it keeps NFR-01 and the no-loss requirement within the facto
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{E1. Gate Core at each factory.} The factory application runs Gate Core with its own database, a synchronous standby, and an outbox (ADR-01, ADR-05). Scanning, the access decision, the opening, and the attendance transaction need only the factory LAN.
-  \item \textbf{E2. Store before acting.} ACCEPTED, the token claim, and the new gate cycle are written in one transaction before openGate. Attendance is created only after a timely PASSAGE, in the same transaction as the passage event, the audit record, and the outbox event (ADR-02).
+  \item \textbf{E2. Store before acting.} ACCEPTED, the token claim, and the new gate cycle are written in one transaction before openGate. Attendance is created only after a timely PASSAGE while the scan is still OPENED, in the same transaction as the passage event, the audit record, and the outbox event (ADR-02).
   \item \textbf{E3. No guessing after a lost reply.} A request that may have been executed is queried or reconciled and never sent again automatically. This holds for openGate and for the emergency reset. A repeated scanId or support case returns the stored result.
   \item \textbf{E4. Bounded degraded mode.} When access data stops being confirmed, the factory moves through the operating modes in Figure 5.3 (ADR-06, Section 5.7.2).
   \item \textbf{E5. Ordered recovery.} After the link returns, Site Sync checks the data before Gate Core uses it again, then resends stored events with their original identifiers, and each consumer applies an event once (Figure 5.2).
@@ -629,7 +629,7 @@ We chose A4 because it keeps NFR-01 and the no-loss requirement within the facto
 
 \vspace{10pt}
 
-Figure 5.3 shows how the operating mode depends on the age of the last confirmed watermark and on the other conditions of Section 5.7.2. A factory goes back to NORMAL as soon as Site Sync has applied the missing updates and a new watermark is confirmed. In the prototype, the mode is computed again from the snapshot for every scan. CANNOT\_PROCESS only stops new scans. A lane that is already open is still watched for PASSAGE and LANE\_CLEAR and closed in the normal way.
+Figure 5.3 shows the eligibility-mode decision made from the snapshot for every scan, including after restart. NORMAL requires a valid snapshot and a watermark at most 60 seconds old; a valid snapshot older than 60 seconds but younger than 30 minutes gives DEGRADED. Reconnection alone does not select NORMAL: the applied snapshot must meet those conditions. Storage failure is a separate reason to refuse a new opening even when the snapshot mode is NORMAL. CANNOT\_PROCESS does not itself authorize closing; existing cycles still follow the PASSAGE, LANE\_CLEAR, emergency, and durable-write rules.
 
 \textbf{How the enhancements mitigate the issue.} Table 5.8 checks each concern from the problem statement against the enhancements and states the risk that remains.
 
@@ -706,7 +706,7 @@ Badge or biometric check at the gate & Checks the person, not only the code. & N
 \hline
 \end{longtable}
 
-\textbf{Chosen enhancement.} We use the short-lived signed code of ADR-11 and I-09. QR Credential Issuance at the central site signs a code that holds the token identifier, the employee identifier, the factory, and its validity, and that expires 60 seconds after it is issued. Access Decision at the factory checks the signature with the public key, the validity period, the factory, and the employee's rights in Eligibility Snapshot. Gate Transaction Processor then claims the tokenId in the same transaction as ACCEPTED, so only one scan across all lanes of the factory can use it (Section 7.3). Under assumption I-08, company email only links to the live code screen and never carries a reusable image. Attendance is still created only from a timely PASSAGE linked to the scan, not from the scan or the opening alone.
+\textbf{Chosen enhancement.} We use the short-lived signed code of ADR-11 and I-09. QR Credential Issuance at the central site signs a code that holds the token identifier, the employee identifier, the factory, and its validity, and that expires 60 seconds after it is issued. Access Decision at the factory checks the signature with the public key, the validity period, the factory, and the employee's rights in Eligibility Snapshot. Gate Transaction Processor then claims the tokenId in the same transaction as ACCEPTED, so only one scan across all lanes of the factory can use it (Section 7.3). Under assumption I-08, company email only links to the live code screen and never carries a reusable image. Attendance is still created only from a timely PASSAGE linked to a scan that is still OPENED, not from the scan or the opening alone; an emergency-superseded or late passage is retained for review.
 
 \textbf{How the enhancement mitigates the issue.} Table 5.11 maps each threat to the control that stops it and to the risk that is left.
 
@@ -727,7 +727,7 @@ T4 & Any change breaks the signature, and only the central site holds the privat
 \hline
 T5 & No reusable image is sent; email only links to the authenticated live display. & I-08 is still an assumption that TMC has to confirm. \\*
 \hline\noalign{\nobreak}
-T6 & Not blocked. Attendance needs a real passage, and each scan is audited with its lane and time. & Live sharing within 60 seconds works. If TMC cannot accept this, a person check (device binding or a guard check) must be added. \\
+T6 & Not blocked. Attendance needs a real passage, and each scan is audited with its lane and time. & A valid, unclaimed copy may win the first scan. If TMC cannot accept this, an independent check of the person at the gate is needed; device binding alone does not prevent sharing a displayed code. \\
 \hline
 \end{longtable}
 

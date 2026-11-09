@@ -79,7 +79,7 @@ class EmployeeRight {
   allowedLanes: set[str]
 }
 
-Lane "1" -- "0..1" GateCycle : active >
+Lane "0..1" -- "0..1" GateCycle : active >
 SupportCase "0..1" -- "*" GateCycle
 ScanAttempt "0..1" -- "0..1" GateCycle
 GateCycle "1" -- "1..*" GateCommand

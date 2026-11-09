@@ -116,7 +116,7 @@ The package \code{src/tmc_gate} follows the Entry, Business, and Persistence lay
 
 Figures 4.18 to 4.20 in Section 4.3 are drawn from this code. They show the classes of \code{domain/}, \code{ports/}, and \code{application/}, and the adapters that implement the ports. The HTTP endpoints map to the interfaces as follows: the kiosk uses \code{POST /api/gate/scans} and \code{GET /api/gate/scans/{id}} (IScanSubmission), the simulated controller uses \code{/api/controller/signals/passage} and \code{/lane-clear} (IPassageEvents), and guards use \code{/api/interventions/*} with an \texttt{X-Guard-Session} header (GateInterventionApi). Demo endpoints under \code{/api/demo/*} are only mounted when \code{demo_mode} is on.
 
-Figure 9.1 shows the tables that the SQLite adapters create in the factory database file, which is set by the \texttt{TMC\_GATE\_DB} variable. There is one table per Gate Core entity of Figure 4.20, plus the outbox, the deduplication marks of incoming events, local audit evidence, and the last applied eligibility snapshot.
+Figure 9.1 shows the tables that the SQLite adapters create in the factory database file, which is set by the \texttt{TMC\_GATE\_DB} variable. The gate records have dedicated tables, alongside the outbox, incoming-event deduplication marks, local audit evidence, and the last applied eligibility snapshot. EmployeeRight has no separate table: its values are stored inside \code{eligibility_snapshots.snapshot_json}.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
@@ -168,7 +168,7 @@ DIP & GateTransactionProcessor receives its ports and IUnitOfWork in the constru
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.4}SOLID Principles Mapped to the Code}
 
-We wrote the ports first, merged them before the other packages, and then treated them as frozen. This let six people work in parallel against fakes, and it is also the practical test of DIP: Packages 1, 3, and 6 were finished and tested before the SQLite repositories and the turnstile adapter existed. Only one port was added after that. A submission review showed that a cycle with no PASSAGE stayed OPENED forever, because nothing called the timeout. The fix needed to find waiting cycles by their own state, even after LANE\_CLEAR had released the lane, so we added the read port IPassageWindowQuery (\code{list_cycles_awaiting_passage}, \code{get_cycle_by_scan}). SqliteScanRepository implements it, and PassageTimeoutWorker in \code{adapters/} calls GateTransactionProcessor.sweepPassageTimeouts every 0.25 seconds while the application is served. A status query after the deadline applies the same timeout, so the kiosk never sees OPENED for a scan whose window has closed. The worker only drives time: the processor checks the deadline and the states inside a transaction, and the timer still never sends closeGate.
+We wrote the ports first, merged them before the other packages, and then treated them as frozen. This let six people work in parallel against fakes, and it is also the practical test of DIP: Packages 1, 3, and 6 were finished and tested before the SQLite repositories and the turnstile adapter existed. Only one port was added after that. A submission review showed that a cycle with no PASSAGE stayed OPENED forever, because nothing called the timeout. The fix needed to find waiting cycles by their own state, even after LANE\_CLEAR had released the lane, so we added the read port IPassageWindowQuery (\code{list_cycles_awaiting_passage}, \code{get_cycle_by_scan}). SqliteScanRepository implements it, and PassageTimeoutWorker in \code{adapters/} calls GateTransactionProcessor.sweepPassageTimeouts every 0.25 seconds while the application is served. A status query after the deadline applies the same timeout, so an overdue scan with no valid passage is returned as PENDING\_RECONCILIATION; a scan with a valid recorded passage keeps its confirmed result. The worker only drives time: the processor checks the deadline and the states inside a transaction, and the timer still never sends closeGate.
 
 \Needspace{9\baselineskip}
 \subsection*{9.5. Design Rules Checked by Tests}
@@ -201,7 +201,7 @@ ADR-11 & Ed25519 signature, 60-second expiry, factory binding, and single-use cl
 \hline
 Flow B, ADR-07 & Assisted opening needs an authorized guard, uses its own 3-second timeout, and creates no attendance; one openGate per supportCaseId, also for two requests at the same time; guardId comes from the session, not the request body. & \code{test_pkg6_intervention.py}, \code{test_pkg6_pr8_*.py}, \code{test_pkg3_rules.py}, \code{test_final_code_edges_regressions.py} \\*
 \hline\noalign{\nobreak}
-Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED for the emergency that holds the lane now ends the hold, so a late reset result for an older emergency returns EMERGENCY\_SUPERSEDED. The RESET command is stored before it is sent and is not resent; a repeated request only queries it. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py}, \code{test_final_code_edges_regressions.py} \\
+Flow B & Emergency release puts the lane in EMERGENCY\_HOLD and blocks new scans; only RESET\_CONFIRMED for the emergency that holds the lane now ends the hold, so a late reset result for an older emergency returns EMERGENCY\_SUPERSEDED. The RESET command is stored before it is sent. An uncertain result reuses and queries that command; only controller-confirmed non-execution (CONTROLLER\_ERROR) permits a new RESET command. & \code{test_pkg6_intervention.py}, \code{test_pkg3_pr2_regressions.py}, \code{test_final_code_edges_regressions.py} \\
 \hline
 Flow B & An emergency wins over an open result that arrives after it: a late OPEN\_CONFIRMED creates no attendance, and a late CONTROLLER\_ERROR does not release the held lane. & \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py} \\
 \hline
@@ -239,7 +239,7 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_pkg4_*.py} & Atomic write, rollback, concurrent token claim, event deduplication, storage time budget & 50 & SQLite file \\
 \hline
-\code{test_pkg5_*.py} & One contract on both adapters, processor with real adapters, demo endpoints, review regressions & 135 (+1 expected failure) & Simulated controller; fake storage \\
+\code{test_pkg5_*.py} & One contract on both adapters, processor with real adapters, demo endpoints, review regressions & 135 (+1 expected failure) & Simulated controller; fake storage or in-memory SQLite \\
 \hline
 \code{test_pkg6_*.py} & Flow B, guard session, support cases, emergency hold and reset & 27 & Fake storage and controller \\*
 \hline\noalign{\nobreak}
