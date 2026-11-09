@@ -7,8 +7,8 @@ skinparam ranksep 45
 
 state "Evaluate current snapshot" as Check <<choice>>
 state "NORMAL" as N : accept otherwise valid QR scans\nwatermark age <= 60 s
-state "DEGRADED" as D : accept otherwise valid QR scans\n60 s < watermark age < 30 min\nflag accepted scan and attendance\nwith the snapshot version
-state "CANNOT_PROCESS" as C : refuse new automatic scans\nretain and track existing cycles
+state "DEGRADED" as D : accept otherwise valid QR scans\n60 s < watermark age < 30 min\nflag accepted scan and attendance\nwith the snapshot version\naudit and alert when the mode\nstarts and ends
+state "CANNOT_PROCESS" as C : refuse new automatic scans\nguards use the manual procedure\nretain and track existing cycles
 
 [*] --> Check : startup / first scan
 Check --> N : prerequisites hold\nand age <= 60 s

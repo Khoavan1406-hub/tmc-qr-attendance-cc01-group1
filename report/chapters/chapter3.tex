@@ -312,7 +312,7 @@ Sending audit and monitoring data & Asynchronous & Central views are delayed; th
 \textbf{Quanta.}
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Processing one scan with a QR code already issued: three quanta.} Each application is deployed on its own with its own data, and the factory application never calls the central one during such a scan. Each factory keeps scanning through a WAN outage (up to 30 minutes under I-10), and a fault at one factory does not affect the other.
+  \item \textbf{Processing one scan with a QR code already issued: three quanta.} Each application is deployed on its own with its own data, and the factory application never calls the central one during such a scan. Each factory keeps scanning through a WAN outage while its last confirmed watermark is less than 30 minutes old (I-10), and a fault at one factory does not affect the other.
   \item \textbf{From issuing a QR code to passing the gate:} still depends on the central application, because employees get new codes from it. If it is down, scans stop within about 60 seconds.
   \item \textbf{Assisted and emergency opening:} the factory application waits for central authorization, so for that operation the factory and the central application act as one quantum.
 \end{itemize}

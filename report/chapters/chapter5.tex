@@ -629,7 +629,7 @@ We chose A4 because it keeps NFR-01 and the no-loss requirement within the facto
 
 \vspace{10pt}
 
-Figure 5.3 shows the eligibility-mode decision made from the snapshot for every scan, including after restart. NORMAL requires a valid snapshot and a watermark at most 60 seconds old; a valid snapshot older than 60 seconds but younger than 30 minutes gives DEGRADED. Reconnection alone does not select NORMAL: the applied snapshot must meet those conditions. Storage failure is a separate reason to refuse a new opening even when the snapshot mode is NORMAL. CANNOT\_PROCESS does not itself authorize closing; existing cycles still follow the PASSAGE, LANE\_CLEAR, emergency, and durable-write rules.
+Figure 5.3 shows the eligibility-mode decision made from the snapshot for every scan, including after restart. NORMAL requires a valid snapshot and a watermark at most 60 seconds old; a valid snapshot older than 60 seconds but younger than 30 minutes gives DEGRADED. Reconnection alone does not select NORMAL: the applied snapshot must meet those conditions. Storage failure is a separate reason to refuse a new opening even when the snapshot mode is NORMAL. CANNOT\_PROCESS does not itself authorize closing; existing cycles still follow the PASSAGE, LANE\_CLEAR, emergency, and durable-write rules. Moving into and out of DEGRADED is written to the audit log and raised as an alert, which the prototype also does. In CANNOT\_PROCESS, guards switch to the approved manual procedure (Section 5.7.2).
 
 \textbf{How the enhancements mitigate the issue.} Table 5.8 checks each concern from the problem statement against the enhancements and states the risk that remains.
 
