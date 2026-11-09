@@ -558,31 +558,210 @@ Three other failure areas need their own handling:
 \phantomsection
 \addcontentsline{toc}{subsection}{5.8. Responses to the Issues Encountered}
 
-The two issues below come from the M2 assignment. We answer them here because their solutions are already part of the architecture.
+The M2 assignment adds two issues: the system can lose connectivity while an attendance transaction is being processed, and a static QR code can be exposed and misused. For each issue we first look at where the problem can happen, then compare the options we considered, describe the enhancement we chose, and check how far it mitigates the issue and what risk is left. Section 5.8.3 shows where the enhancements sit in the logical and physical architecture. Most of the mechanisms were already built into the design in Chapters 4 to 7, so this section collects them in one place and points to the sections with the details.
 
+\Needspace{9\baselineskip}
 \subsubsection*{5.8.1. Connectivity Loss during an Attendance Transaction}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{5.8.1. Connectivity Loss during an Attendance Transaction}
 
-If the link to the central site fails while a scan is being processed, Gate Core at the factory can finish the scan only while the local controller, database, token, and eligibility snapshot meet the conditions in Section 5.7.2. It stores ACCEPTED and the token claim before openGate. A lost opening response is recorded as UNDETERMINED before querying or reconciling the outcome; openGate is not resent automatically. For a timely, reliable passage, the factory commits the event, attendance transaction, audit record, and outbox event together. A late passage is stored for review without automatic attendance (Section 4.2.5). Site Sync sends committed events after reconnection with the original eventId, and central consumers apply each event once (ADR-02 and ADR-05).
+\textbf{Problem.} One gate transaction crosses several links: the kiosk talks to the factory server, the factory server talks to the turnstile controller, and the factory sends events to the central site over the WAN and the message broker. Any of these links can break after the employee has scanned but before the transaction is finished. If that happens, an attendance record can be lost or stored twice, the gate can open without any evidence, and a factory that has lost contact with the central site can keep using access rights that are no longer current. Table 5.6 lists the points where the connection can fail and what is at stake at each one.
 
-Gate Core and its database, including the outbox, run at each factory. Site Sync runs at the factories and the central site and delivers stored events through the broker to central Attendance.
+\begin{longtable}{|>{\raggedright\arraybackslash}p{62pt}|>{\raggedright\arraybackslash}p{150pt}|>{\raggedright\arraybackslash}p{199pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{62pt}|}{\textbf{Point}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{150pt}|}{\textbf{What can go wrong}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{199pt}|}{\textbf{How the design handles it}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.6}Failure Points in a Gate Transaction}\textbf{Table 5.6. Failure Points in a Gate Transaction}} \\
+\endlastfoot
+F1. Kiosk to factory server (LAN) & Gate Core has stored the result, but the response does not reach the kiosk, and the kiosk may send the scan again. & The kiosk keeps the scanId and asks again with the same scanId. Gate Core returns the stored status without a second command or transaction (Section 7.3.2). \\
+\hline
+F2. Factory server to controller & The openGate reply is lost, so nobody knows whether the gate opened. & ACCEPTED, the token claim, and the gate cycle are stored before openGate. A lost reply becomes UNDETERMINED, the controller is queried, and the scan goes to PENDING\_RECONCILIATION if the result is still unknown. openGate is never resent (ADR-02, Section 4.2.5). \\
+\hline
+F3. Factory to central site (WAN or broker) & Committed events cannot be delivered, and access-right updates stop arriving. & Events wait in the factory outbox and are resent later with their original identifiers (ADR-05). Access data ages: degraded mode after 60 seconds, no automatic scans from 30 minutes (ADR-06, Section 5.7.2). \\
+\hline
+F4. Central site unavailable & QR issuing stops, and software approval for assisted access is not available. & Codes already shown expire within 60 seconds, then guards use the approved manual procedure and enter the cases after recovery (Sections 5.7.2 and 5.7.4). \\*
+\hline\noalign{\nobreak}
+F5. Factory application or database fails & A transaction is cut in the middle of its steps. & Each step is one database transaction. After failover, new scans wait until unfinished states are checked, and an uncertain opening is queried or reconciled (Sections 5.6.2 and 5.7.4). \\
+\hline
+\end{longtable}
 
-Connectivity loss also includes the local links: a kiosk that loses the server response shows UNDETERMINED and queries with the same scanId after reconnection, while an uncertain server--controller outcome is queried or reconciled without automatically resending openGate (Section 5.7.4).
+\textbf{Alternatives considered.} Table 5.7 compares four ways of keeping the gates working when a link fails.
 
+\begin{longtable}{|>{\raggedright\arraybackslash}p{96pt}|>{\raggedright\arraybackslash}p{150pt}|>{\raggedright\arraybackslash}p{165pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{96pt}|}{\textbf{Option}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{150pt}|}{\textbf{Strength}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{165pt}|}{\textbf{Weakness}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.7}Alternatives for Handling Connectivity Loss}\textbf{Table 5.7. Alternatives for Handling Connectivity Loss}} \\
+\endlastfoot
+A1. Central online check for every scan & Access rights are always current, and there is only one copy of the data. & A WAN or central failure stops every gate at both factories, and WAN delay is added to the 2-second scan path. \\
+\hline
+A2. Each kiosk decides on its own with a local cache & A kiosk keeps working even when the factory server is down. & Token claims are split across kiosks, so one copied code could be accepted at two lanes. Personal data and evidence are kept on many devices that are harder to protect. \\
+\hline
+A3. Factory server decides, with no limit on data age & Gates keep working for as long as the factory itself works. & A revocation made at the central site could be ignored for hours or days without anyone noticing. \\*
+\hline\noalign{\nobreak}
+A4. Factory server decides, with an outbox and a bounded degraded mode (chosen) & The scan only needs the factory LAN, all lanes share one token-claim store, and the age of access data has a hard limit. & A revocation during an outage can take up to 30 minutes to reach the factory, and guards need a manual procedure after that. \\
+\hline
+\end{longtable}
 
-When the confirmed watermark becomes older than 60 seconds and the other conditions still hold, the factory switches to degraded mode (I-10). Because the watermark may already be a few seconds old when the link fails, this can happen less than 60 seconds into the outage. The factory keeps accepting signed, unexpired, unclaimed QR codes until 30 minutes after the last confirmed update, or until another required condition fails, and flags each transaction for review after reconnection. After that, new automatic scans stop at every lane and guards use the approved manual procedure. Missing controller or database evidence still goes to reconciliation.
+We chose A4 because it keeps NFR-01 and the no-loss requirement within the factory, while A1 makes every gate depend on the WAN and A2 breaks single-use QR codes. The cost of A4 is the revocation delay, which TMC has to approve (I-10).
 
+\textbf{Chosen enhancements.} The response has five parts that work together:
+
+\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
+  \item \textbf{E1. Gate Core at each factory.} The factory application runs Gate Core with its own database, a synchronous standby, and an outbox (ADR-01, ADR-05). Scanning, the access decision, the opening, and the attendance transaction need only the factory LAN.
+  \item \textbf{E2. Store before acting.} ACCEPTED, the token claim, and the new gate cycle are written in one transaction before openGate. Attendance is created only after a timely PASSAGE, in the same transaction as the passage event, the audit record, and the outbox event (ADR-02).
+  \item \textbf{E3. No guessing after a lost reply.} A request that may have been executed is queried or reconciled and never sent again automatically. This holds for openGate and for the emergency reset. A repeated scanId or support case returns the stored result.
+  \item \textbf{E4. Bounded degraded mode.} When access data stops being confirmed, the factory moves through the operating modes in Figure 5.3 (ADR-06, Section 5.7.2).
+  \item \textbf{E5. Ordered recovery.} After the link returns, Site Sync checks the data before Gate Core uses it again, then resends stored events with their original identifiers, and each consumer applies an event once (Figure 5.2).
+\end{itemize}
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\IfFileExists{diagram/deployment/figure-5-3-operating-modes.png}{\includegraphics[width=0.9\linewidth]{diagram/deployment/figure-5-3-operating-modes.png}}{\fbox{\parbox{300pt}{\centering\vspace{20pt}Figure being redrawn\vspace{20pt}}}}
+
+\vspace{6pt}
+\textbf{Figure 5.3. Operating Modes of a Factory during Connectivity Loss}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{5.3}Operating Modes of a Factory during Connectivity Loss}
+\end{minipage}
+
+\vspace{10pt}
+
+Figure 5.3 shows how the operating mode depends on the age of the last confirmed watermark and on the other conditions of Section 5.7.2. A factory goes back to NORMAL as soon as Site Sync has applied the missing updates and a new watermark is confirmed. In the prototype, the mode is computed again from the snapshot for every scan. CANNOT\_PROCESS only stops new scans. A lane that is already open is still watched for PASSAGE and LANE\_CLEAR and closed in the normal way.
+
+\textbf{How the enhancements mitigate the issue.} Table 5.8 checks each concern from the problem statement against the enhancements and states the risk that remains.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{84pt}|>{\raggedright\arraybackslash}p{186pt}|>{\raggedright\arraybackslash}p{141pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{84pt}|}{\textbf{Concern}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{186pt}|}{\textbf{Result with E1--E5}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{141pt}|}{\textbf{Remaining risk}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.8}Mitigation of Connectivity Loss}\textbf{Table 5.8. Mitigation of Connectivity Loss}} \\
+\endlastfoot
+Lost attendance record & The record and its outbox event are committed at the factory before anything is sent to the central site, and they are delivered later with the same eventId. & The outbox must be large enough for the outage (sized for 48 hours, alerts at 70\% and 85\%, Table 5.5). \\
+\hline
+Duplicate record & scanId, tokenId, passageEventId, and eventId are each unique, and central consumers use eventId and version to skip events they have already processed. & Missing versions and the outbox backlog have to be monitored (ADR-05). \\
+\hline
+Gate state unknown & An uncertain opening is queried and then reconciled, never resent, and the lane stays held until the outcome is known. & A held lane may need a guard to step in during the shift peak. \\
+\hline
+Out-of-date access rights & Degraded mode lasts less than 30 minutes, and every scan in it is flagged with its snapshot version for Attendance Review. & A revoked employee can still pass during that window, and the flag cannot undo the entry (I-10). \\*
+\hline\noalign{\nobreak}
+Central site down & Automatic scans stop within about 60 seconds as the shown codes expire, and the manual procedure takes over. & Guard staffing for about 80 arrivals per minute at the peak (Section 5.7.2). \\
+\hline
+\end{longtable}
+
+\textbf{What the prototype shows.} The Task 2 code covers E2, E3, and the mode rules of E4 for one factory (Chapter 9). Tests on a real SQLite file show that an UNDETERMINED opening becomes PENDING\_RECONCILIATION without a second openGate, that a controller signal sent twice still gives one attendance record, and that the stored state survives an application restart (\code{test_e2e_sqlite_flows.py}). The NORMAL, DEGRADED, and CANNOT\_PROCESS limits are tested in \code{test_pkg1_snapshot.py}. Site Sync, the broker, and the central site are not built, so delivery after reconnection (E5) is shown only in the design.
+
+\Needspace{9\baselineskip}
 \subsubsection*{5.8.2. Exposure of a Static QR Code}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{5.8.2. Exposure of a Static QR Code}
 
-A copied static QR image could be presented by another person. The proposed credential is signed, valid for 60 seconds, bound to one factory, and claimable by only one ACCEPTED scan across its lanes (I-09; ADR-11). The email route to a fresh display remains an open assumption (I-08).
+\textbf{Problem.} A static QR code never changes. Anyone who gets a photo, a screenshot, or a forwarded copy of it can pass the gate and create attendance in the employee's name for as long as the code is accepted, and the system cannot tell the copy from the original. Table 5.9 lists the ways a code can be misused.
 
-QR Credential Issuance in Access \& Configuration (M4, central) supplies the code shown by Employee Portal. Access Decision in Gate Core (M1, factory) validates it, and Gate Transaction Processor stores the token claim in the factory database shared by all lanes.
+\begin{longtable}{|>{\raggedright\arraybackslash}p{40pt}|>{\raggedright\arraybackslash}p{120pt}|>{\raggedright\arraybackslash}p{251pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{40pt}|}{\textbf{ID}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{120pt}|}{\textbf{Threat}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{251pt}|}{\textbf{Example}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.9}Threats from an Exposed QR Code}\textbf{Table 5.9. Threats from an Exposed QR Code}} \\
+\endlastfoot
+T1 & Copy used later & A colleague keeps a photo of the code and checks in for the employee the next day. \\
+\hline
+T2 & Copy used at the same time & The same image is shown at two lanes of one factory within a few seconds. \\
+\hline
+T3 & Copy used at the other factory & A code issued for Binh Duong is shown at Long An. \\
+\hline
+T4 & Forged or changed code & Someone edits the employee identifier inside the code or builds a new code. \\
+\hline
+T5 & Leak through a shared channel & A QR image sent by email is forwarded or stays in a mailbox. \\*
+\hline\noalign{\nobreak}
+T6 & Live sharing & The employee sends a fresh code to a colleague, who scans it before it expires. \\
+\hline
+\end{longtable}
 
-To limit false attendance, Gate Core creates automatic attendance only from a timely, reliable PASSAGE event linked to that scan, not from scanning or opening alone; attempts to reuse a claimed token under a new scanId are rejected and audited. Manual and assisted cases need HR approval before they create attendance.
+\textbf{Alternatives considered.} Table 5.10 compares the options we looked at.
 
-These controls shorten the time in which a copied image is useful and prevent reuse after its first claim. They cannot identify the person who presents an unclaimed image, even if that person passes through the gate. If TMC considers that risk unacceptable, it must add a separate identity check.
+\begin{longtable}{|>{\raggedright\arraybackslash}p{110pt}|>{\raggedright\arraybackslash}p{140pt}|>{\raggedright\arraybackslash}p{161pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{110pt}|}{\textbf{Option}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{140pt}|}{\textbf{Strength}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{161pt}|}{\textbf{Weakness}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.10}Alternatives for Protecting the QR Credential}\textbf{Table 5.10. Alternatives for Protecting the QR Credential}} \\
+\endlastfoot
+Keep the static code and revoke it when a leak is reported & Nothing changes for employees. & A leak is rarely noticed, so revocation comes after the damage. \\
+\hline
+Static code plus a PIN at the kiosk & Adds a second factor. & Typing a PIN slows the shift-change peak, and a PIN can be shared as easily as the image. \\
+\hline
+Code that changes on the phone from a shared secret (TOTP style) & Works without a network on the phone. & The secret must be stored on every phone and at every factory, and a leaked secret lets anyone build valid codes. \\
+\hline
+Short-lived code signed at the central site, bound to one factory and used once (chosen) & The private key stays at the central site, factories need only public keys, and a code is useless after 60 seconds or after its first claim. & The phone needs to reach the central site to get a code, and the code still does not prove who holds the phone. \\
+\hline
+Code signed by a key kept in the employee's phone & Ties the code to one registered phone. & Needs a device enrollment process and the mobile app on every phone, and does not stop an employee from handing over the phone. \\*
+\hline\noalign{\nobreak}
+Badge or biometric check at the gate & Checks the person, not only the code. & New hardware, slower lanes, and extra personal data to protect (NFR-04). Outside the scope of this design. \\
+\hline
+\end{longtable}
+
+\textbf{Chosen enhancement.} We use the short-lived signed code of ADR-11 and I-09. QR Credential Issuance at the central site signs a code that holds the token identifier, the employee identifier, the factory, and its validity, and that expires 60 seconds after it is issued. Access Decision at the factory checks the signature with the public key, the validity period, the factory, and the employee's rights in Eligibility Snapshot. Gate Transaction Processor then claims the tokenId in the same transaction as ACCEPTED, so only one scan across all lanes of the factory can use it (Section 7.3). Under assumption I-08, company email only links to the live code screen and never carries a reusable image. Attendance is still created only from a timely PASSAGE linked to the scan, not from the scan or the opening alone.
+
+\textbf{How the enhancement mitigates the issue.} Table 5.11 maps each threat to the control that stops it and to the risk that is left.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{28pt}|>{\raggedright\arraybackslash}p{220pt}|>{\raggedright\arraybackslash}p{163pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{28pt}|}{\textbf{ID}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{220pt}|}{\textbf{Control}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{163pt}|}{\textbf{Remaining risk}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.11}Mitigation of QR Exposure}\textbf{Table 5.11. Mitigation of QR Exposure}} \\
+\endlastfoot
+T1 & The code expires after 60 seconds, and a claimed tokenId cannot be claimed again, so an old copy is rejected as expired or as a replay. & None after the code has expired or been claimed. \\
+\hline
+T2 & The claim is part of the ACCEPTED write and is protected by a unique key, so the second scan is rejected and audited. & The first scan wins, and it may be the copy. \\
+\hline
+T3 & The factory is part of the signed content and is compared with the server's own factory, not with a value sent by the kiosk. & None. \\
+\hline
+T4 & Any change breaks the signature, and only the central site holds the private key. & Theft of the private key at the central site. \\
+\hline
+T5 & No reusable image is sent; email only links to the authenticated live display. & I-08 is still an assumption that TMC has to confirm. \\*
+\hline\noalign{\nobreak}
+T6 & Not blocked. Attendance needs a real passage, and each scan is audited with its lane and time. & Live sharing within 60 seconds works. If TMC cannot accept this, a person check (device binding or a guard check) must be added. \\
+\hline
+\end{longtable}
+
+\textbf{What the prototype shows.} The Task 2 code verifies the factory side of this enhancement with real Ed25519 keys: signature, expiry, factory binding, and key rotation in \code{test_pkg2_*.py}, two connections claiming one token in \code{test_pkg4_sqlite_repos.py}, and a copied code on another lane rejected with QR\_TOKEN\_REPLAY\_DETECTED in \code{test_e2e_sqlite_flows.py}. The QR issuer in the prototype is only a demo helper, not the central issuing service.
+
+\Needspace{9\baselineskip}
+\subsubsection*{5.8.3. Impact on the Architecture}
+
+\phantomsection
+\addcontentsline{toc}{subsubsection}{5.8.3. Impact on the Architecture}
+
+Neither enhancement needs a new module or node. They are rules inside modules that already exist, fixed by ADR-02, ADR-05, ADR-06, and ADR-11. Table 5.12 shows where each part lives.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{95pt}|>{\raggedright\arraybackslash}p{316pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{95pt}|}{\textbf{Module or node}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{316pt}|}{\textbf{Role in the two enhancements}} \\
+\hline
+\endhead
+\multicolumn{2}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.12}Where the Enhancements Live}\textbf{Table 5.12. Where the Enhancements Live}} \\
+\endlastfoot
+M1 Gate Core (factory) & Access Decision checks the signed code and the operating mode; Gate Transaction Processor stores ACCEPTED and the token claim before openGate, handles uncertain results without resending, and writes attendance with its outbox event. \\
+\hline
+M2 Turnstile Integration (factory) & Queries the controller about uncertain commands instead of resending them. \\
+\hline
+M4 Access \& Configuration (central) & QR Credential Issuance signs short-lived codes and keeps the private key; the Access Change Feed sends access rights and confirmed watermarks to the factories. \\
+\hline
+M9 Site Sync (both sites) & Delivers outbox events with their original identifiers and applies access-right updates in the recovery order of Figure 5.2. \\
+\hline
+M5 Attendance (central) & Attendance Review checks DEGRADED transactions after reconnection and handles reconciliation cases. \\
+\hline
+M11 Audit, M12 Monitoring & Record rejected replays and the start and end of degraded mode, and raise alerts for degraded mode and outbox capacity. \\
+\hline
+Factory server and database & Primary and standby with a synchronous copy (Section 5.6.2), so a server failure does not lose the token claims or the outbox. \\*
+\hline\noalign{\nobreak}
+Central reverse proxy and broker & The proxy runs as an active/standby pair because QR issuing depends on it; the broker has a recovery target that stays below the 30-minute limit (Table 5.5). \\
+\hline
+\end{longtable}

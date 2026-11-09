@@ -1349,3 +1349,28 @@ Guard actions (Flow B) take a separate path. \code{intervention_controller} gets
 \vspace{10pt}
 
 Figure 4.20 shows the entities and their multiplicities, including the rule that a Lane has at most one active GateCycle. A later close failure never erases a confirmed attendance transaction, and neither assisted nor emergency opening creates attendance from the opening alone.
+
+Table 4.26 lists the enumerations that appear as attribute types in Figures 4.18 to 4.20. The values are the ones in \code{src/tmc_gate/domain/enums.py}.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{92pt}|>{\raggedright\arraybackslash}p{178pt}|>{\raggedright\arraybackslash}p{141pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{92pt}|}{\textbf{Type}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{178pt}|}{\textbf{Values}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{141pt}|}{\textbf{Used in}} \\
+\hline
+\endhead
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{4.26}Value Types Used in the Class Diagrams}\textbf{Table 4.26. Value Types Used in the Class Diagrams}} \\
+\endlastfoot
+ScanState & RECEIVED, ACCEPTED, OPENED, REJECTED, LANE\_BUSY, CANNOT\_PROCESS, CONTROLLER\_ERROR, UNDETERMINED, PENDING\_RECONCILIATION, RECONCILED & \code{ScanAttempt.state} \\
+\hline
+PassageStatus & WAITING, PASSED, NO\_PASSAGE & \code{GateCycle.passageStatus} \\
+\hline
+ClosureStatus & OPENED, CLEAR\_TO\_CLOSE, CLOSE\_SENT, CLOSED, CLOSE\_FAILED, CLOSE\_UNCERTAIN, EMERGENCY\_HOLD & \code{GateCycle.closureStatus} \\
+\hline
+CommandType & OPEN, CLOSE, EMERGENCY\_RELEASE, RESET & \code{GateCommand.commandType} \\
+\hline
+CommandOutcome & SENT, NOT\_SENT, OPEN\_CONFIRMED, CLOSED, EMERGENCY\_RELEASED, RESET\_CONFIRMED, CONTROLLER\_ERROR, UNDETERMINED & \code{GateCommand.outcome}; SENT and NOT\_SENT are stored states only, a port never returns them \\
+\hline
+OperatingMode & NORMAL, DEGRADED, CANNOT\_PROCESS & Result of \code{EligibilitySnapshot.getOperatingMode} (Figure 5.3) \\*
+\hline\noalign{\nobreak}
+Direction & ENTRY, EXIT & direction of Lane and of AttendanceTransaction \\
+\hline
+\end{longtable}

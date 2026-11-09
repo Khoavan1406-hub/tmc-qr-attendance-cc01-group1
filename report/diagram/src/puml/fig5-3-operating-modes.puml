@@ -1,0 +1,19 @@
+@startuml
+!include style.iuml
+skinparam stateBackgroundColor white
+skinparam stateBorderThickness 1.2
+skinparam stateFontSize 14
+skinparam ranksep 70
+
+state "NORMAL" as N : accept valid QR codes\nwith current access data
+state "DEGRADED" as D : accept only signed, unexpired,\nunclaimed QR codes\nflag scan and attendance DEGRADED\nwith the snapshot version\naudit and alert at start and end
+state "CANNOT_PROCESS" as C : new scans return CANNOT_PROCESS\nguards use the manual procedure\nopened lanes are still tracked and closed
+
+[*] --> N : snapshot complete and continuous,\nclock bound < 2 s
+N --> D : watermark age > 60 s\n(no confirmed update)
+D --> N : missing updates applied,\nnew confirmed watermark
+D --> C : watermark age reaches 30 min
+N --> C : continuity lost, clock bound unknown or >= 2 s,\nor no durable write / storage
+D --> C : same conditions as NORMAL
+C --> N : data resynchronized and\nall conditions checked again
+@enduml
