@@ -1,0 +1,135 @@
+@startuml
+!include style.iuml
+skinparam linetype ortho
+
+package "Factory database (SQLite file, TMC_GATE_DB)" {
+entity lanes {
+  *lane_id : TEXT <<PK>>
+  --
+  station_id : TEXT
+  factory_id : TEXT
+  direction : TEXT
+  active_cycle_id : TEXT <<UNIQUE>>
+}
+entity gate_cycles {
+  *cycle_id : TEXT <<PK>>
+  --
+  lane_id : TEXT
+  scan_id : TEXT
+  support_case_id : TEXT
+  passage_status : TEXT
+  closure_status : TEXT
+  observation_deadline : TEXT
+  lane_clear_received : INTEGER
+  close_command_id : TEXT
+  emergency_support_case_id : TEXT
+}
+entity scan_attempts {
+  *scan_id : TEXT <<PK>>
+  --
+  token_id : TEXT
+  employee_id : TEXT
+  factory_id : TEXT
+  lane_id : TEXT
+  state : TEXT
+  degraded_flag : INTEGER
+  snapshot_version : INTEGER
+  reason : TEXT
+  created_at : TEXT
+}
+entity token_reservations {
+  *factory_id : TEXT <<PK>>
+  *token_id : TEXT <<PK>>
+  --
+  scan_id : TEXT <<UNIQUE>>
+  claimed_at : TEXT
+  expires_at : TEXT
+}
+entity gate_commands {
+  *command_id : TEXT <<PK>>
+  --
+  cycle_id : TEXT
+  lane_id : TEXT
+  scan_id : TEXT
+  support_case_id : TEXT
+  command_type : TEXT
+  outcome : TEXT
+  issued_at : TEXT
+}
+entity support_cases {
+  *support_case_id : TEXT <<PK>>
+  --
+  factory_id : TEXT
+  lane_id : TEXT
+  guard_id : TEXT
+  employee_id : TEXT
+  reason : TEXT
+  linked_scan_id : TEXT
+  is_emergency : INTEGER
+  occurred_at : TEXT
+}
+entity passage_events {
+  *passage_event_id : TEXT <<PK>>
+  --
+  command_id : TEXT
+  cycle_id : TEXT
+  lane_id : TEXT
+  occurred_at : TEXT
+  review_reason : TEXT
+}
+entity attendance_transactions {
+  *transaction_id : TEXT <<PK>>
+  --
+  scan_id : TEXT <<UNIQUE>>
+  passage_event_id : TEXT <<UNIQUE>>
+  employee_id : TEXT
+  factory_id : TEXT
+  lane_id : TEXT
+  direction : TEXT
+  occurred_at : TEXT
+  source : TEXT
+  degraded_flag : INTEGER
+  snapshot_version : INTEGER
+}
+entity eligibility_snapshots {
+  *factory_id : TEXT <<PK>>
+  --
+  snapshot_version : INTEGER
+  snapshot_json : TEXT
+  updated_at : TEXT
+}
+entity outbox_events {
+  *event_id : TEXT <<PK>>
+  --
+  payload_json : TEXT
+  created_at : TEXT
+}
+entity processed_events {
+  *consumer : TEXT <<PK>>
+  *event_id : TEXT <<PK>>
+  --
+  payload_hash : TEXT
+  conflict_flagged : INTEGER
+  processed_at : TEXT
+}
+entity local_audit_evidence {
+  *audit_id : TEXT <<PK>>
+  --
+  payload_json : TEXT
+  created_at : TEXT
+}
+}
+
+lanes ||..o{ gate_cycles : lane_id
+gate_cycles ||..|{ gate_commands : cycle_id
+gate_cycles ||..o{ passage_events : cycle_id
+gate_commands ||..o{ passage_events : command_id
+scan_attempts |o..o| gate_cycles : scan_id
+scan_attempts ||..o| token_reservations : scan_id
+support_cases |o..o{ gate_cycles : support_case_id
+passage_events ||..o| attendance_transactions : passage_event_id
+scan_attempts ||..o| attendance_transactions : scan_id
+eligibility_snapshots -[hidden]- outbox_events
+outbox_events -[hidden]- processed_events
+processed_events -[hidden]- local_audit_evidence
+@enduml

@@ -1,0 +1,27 @@
+@startuml
+!include style.iuml
+skinparam stateBackgroundColor white
+skinparam stateBorderThickness 1.2
+skinparam stateFontSize 14
+skinparam ranksep 45
+
+state "Evaluate current snapshot" as Check <<choice>>
+state "NORMAL" as N : accept otherwise valid QR scans\nwatermark age <= 60 s
+state "DEGRADED" as D : accept otherwise valid QR scans\n60 s < watermark age < 30 min\nflag accepted scan and attendance\nwith the snapshot version
+state "CANNOT_PROCESS" as C : refuse new automatic scans\nretain and track existing cycles
+
+[*] --> Check : startup / first scan
+Check --> N : prerequisites hold\nand age <= 60 s
+Check --> D : prerequisites hold\nand 60 s < age < 30 min
+Check --> C : prerequisites fail\nor age >= 30 min
+N --> Check : next scan
+D --> Check : next scan
+C --> Check : next scan
+
+note top of Check
+Snapshot prerequisites:
+positive integer version; complete and continuous;
+known clock error bound >= 0 and < 2 s;
+valid timestamp and watermark age >= 0.
+end note
+@enduml

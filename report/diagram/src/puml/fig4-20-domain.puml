@@ -1,0 +1,92 @@
+@startuml
+!include style.iuml
+
+class Lane {
+  laneId: str
+  factoryId: str
+  direction: Direction
+  activeCycleId: str | None
+}
+class GateCycle {
+  cycleId: str
+  laneId: str
+  passageStatus: PassageStatus
+  closureStatus: ClosureStatus
+  observationDeadline: datetime
+  scanId: str | None
+  supportCaseId: str | None
+  laneClearReceived: bool
+  closeCommandId: str | None
+  emergencySupportCaseId: str | None
+  +is_active_or_unresolved(): bool
+}
+class SupportCase {
+  supportCaseId: str
+  laneId: str
+  guardId: str
+  employeeId: str | None
+  isEmergency: bool
+}
+class ScanAttempt {
+  scanId: str
+  laneId: str
+  state: ScanState
+  tokenId: str | None
+  employeeId: str | None
+  degradedFlag: bool
+  snapshotVersion: int
+}
+class TokenReservation {
+  tokenId: str {unique per factory}
+  factoryId: str
+  scanId: str {unique}
+  claimedAt: datetime
+  expiresAt: datetime
+}
+class GateCommand {
+  commandId: str
+  cycleId: str
+  commandType: CommandType
+  outcome: CommandOutcome
+  issuedAt: datetime | None
+}
+class PassageEvent {
+  passageEventId: str
+  commandId: str
+  cycleId: str
+  occurredAt: datetime
+  reviewReason: str | None
+}
+class AttendanceTransaction {
+  transactionId: str
+  scanId: str {unique}
+  passageEventId: str {unique}
+  employeeId: str
+  direction: Direction
+  degradedFlag: bool
+}
+class EligibilitySnapshot {
+  snapshotVersion: int
+  confirmedWatermark: datetime
+  isCompleteAndContinuous: bool
+  verificationKeys: tuple
+  +getOperatingMode(now): OperatingMode
+  +isEmployeeEligible(employeeId, laneId)
+}
+class EmployeeRight {
+  employeeId: str
+  active: bool
+  allowedLanes: set[str]
+}
+
+Lane "0..1" -- "0..1" GateCycle : active >
+SupportCase "0..1" -- "*" GateCycle
+ScanAttempt "0..1" -- "0..1" GateCycle
+GateCycle "1" -- "1..*" GateCommand
+ScanAttempt "1" -- "0..1" TokenReservation
+GateCycle "1" -- "*" PassageEvent
+GateCommand "1" -- "*" PassageEvent
+PassageEvent "1" -- "0..1" AttendanceTransaction
+ScanAttempt "1" -- "0..1" AttendanceTransaction
+EligibilitySnapshot "1" *-- "*" EmployeeRight
+@enduml

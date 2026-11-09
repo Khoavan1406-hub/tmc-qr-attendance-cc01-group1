@@ -1,0 +1,83 @@
+@startuml
+!include style.iuml
+
+class "gate_controller" as GC <<presentation>> {
+  +POST /api/gate/scans
+  +GET /api/gate/scans/{scanId}
+}
+interface IScanSubmission {
+  +submitScan(scanId, qrToken, laneId, now, deadline): ScanResult
+  +getScanStatus(scanId): ScanResult
+}
+interface GateCoreApi
+class GateCoreFacade
+class GateTransactionProcessor {
+  -SCAN_DEADLINE_BUDGET_MS = 2000
+  -OPEN_COMMAND_BUDGET_MS = 700
+  +processScan(scanId, qrToken, laneId, now, deadline): ScanResult
+  +getScanStatus(scanId): ScanResult
+}
+class AccessDecision {
+  +evaluate(qrToken, laneId, now): DecisionResult
+}
+class DecisionResult {
+  allowed: bool
+  operatingMode: OperatingMode
+  snapshotVersion: int
+  reason: str
+  claims: TokenClaims
+}
+class ScanResult {
+  scanId: str
+  state: ScanState
+  degradedFlag: bool
+  reason: str
+  commandId: str
+}
+interface ISnapshotRepository {
+  +get_snapshot(): EligibilitySnapshot
+  +save_snapshot(snapshot)
+}
+interface IScanRepository {
+  +get_scan(scanId): ScanAttempt
+  +atomic_reserve_lane_claim_token_and_accept(...)
+  +update_opening_outcome(...)
+}
+interface IUnitOfWork {
+  +begin(timeout_ms)
+  +commit()
+  +rollback()
+}
+interface IOpenGate {
+  +openGate(commandId, laneId, timeout_ms)
+}
+interface IControllerStatusQuery {
+  +queryStatus(commandId, laneId)
+}
+interface IAuditApi <<cross-cutting>> {
+  +append_async(record)
+}
+class SqliteScanRepository <<adapter>>
+class SqliteSnapshotRepository <<adapter>>
+class SqliteUnitOfWork <<adapter>>
+class SimulatedTurnstileAdapter <<adapter>>
+
+GC --> IScanSubmission
+GateCoreApi -up-|> IScanSubmission
+GateCoreFacade ..|> GateCoreApi
+GateCoreFacade --> GateTransactionProcessor
+GateTransactionProcessor --> AccessDecision
+IScanSubmission .right.> ScanResult : returns
+AccessDecision ..> DecisionResult : returns
+AccessDecision --> ISnapshotRepository
+GateTransactionProcessor --> IScanRepository
+GateTransactionProcessor --> IUnitOfWork
+GateTransactionProcessor ----> IOpenGate
+GateTransactionProcessor ----> IControllerStatusQuery
+GateTransactionProcessor ----> IAuditApi
+SqliteSnapshotRepository .up.|> ISnapshotRepository
+SqliteScanRepository .up.|> IScanRepository
+SqliteUnitOfWork .up.|> IUnitOfWork
+SimulatedTurnstileAdapter .up.|> IOpenGate
+SimulatedTurnstileAdapter .up.|> IControllerStatusQuery
+@enduml

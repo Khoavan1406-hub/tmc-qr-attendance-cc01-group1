@@ -135,7 +135,7 @@ Each record below gives the characteristics involved, the context, the decision,
   \item \textbf{Decision:} Access Decision uses the factory's Eligibility Snapshot while its completeness, version, continuity, and freshness checks pass. The data is fresh for 60 seconds after a source-confirmed watermark. After that, Gate Core runs in degraded mode while the same watermark is less than 30 minutes old, accepts only valid signed QR codes, and flags every transaction for review (I-10). From 30 minutes on, new scans return CANNOT PROCESS.
   \item \textbf{Reasons:} The local copy keeps the scan off the WAN, and the degraded window keeps the gates working through one shift-change peak when the link fails.
   \item \textbf{Consequences:} New automatic scans stop when the limit is reached or data continuity is lost, and Attendance Review checks the flagged transactions after reconnection. QR validity and replay control are handled separately by ADR-11.
-  \item \textbf{Trade-off:} A revocation made during an outage may take up to 30 minutes to reach the factory. TMC must approve both limits; immediate revocation would need an online check or stopping the affected scans.
+  \item \textbf{Trade-off:} A revocation may remain unknown until reconnection. The 30-minute watermark limit bounds how long automatic acceptance can use old rights; it does not guarantee delivery within 30 minutes. TMC must approve both limits; immediate revocation would need an online check or stopping the affected scans.
 \end{itemize}
 
 \subsubsection*{6.2.7. ADR-07: Separate Assisted Access Approval from Attendance Application}
