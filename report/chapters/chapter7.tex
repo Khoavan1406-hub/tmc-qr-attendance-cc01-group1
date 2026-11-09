@@ -3,68 +3,51 @@
 \phantomsection
 \addcontentsline{toc}{section}{7. DESIGN PRINCIPLES AND DATA SECURITY}
 
-This chapter shows how design principles keep the module boundaries of Chapter 4 clear, and how QR codes, permissions, audit records, and personal data are protected.
+This chapter looks at the design from two sides. Sections 7.1 and 7.2 explain how SOLID, cohesion, and coupling keep the module boundaries of Chapter 4 clear, and Sections 7.3 to 7.5 explain how QR codes, permissions, audit records, and personal data are protected. Most of the chapter describes the target design. The parts that were actually built and tested in the M2 prototype are shown in Section 9.4.
 
 \subsection*{7.1. SOLID Principles}
 
 \phantomsection
 \addcontentsline{toc}{subsection}{7.1. SOLID Principles}
 
-The modules own distinct decisions and data. Gate Core owns factory scan and passage records, Access \& Configuration owns access rights and station settings, Attendance owns consolidation and review, and Payroll Handover owns batches. Modules exchange data through public contracts, and the two external adapters implement ports defined by Gate Core and Payroll Handover. We apply SOLID to these modules, interfaces, and ports, not only to classes.
+Each module owns its own decisions and data. Gate Core owns factory scan and passage records, Access \& Configuration owns access rights and station settings, Attendance owns consolidation and review, and Payroll Handover owns batches. Modules exchange data through public contracts, and the two external adapters implement ports defined by Gate Core and Payroll Handover. For this reason we apply SOLID to modules, interfaces, and ports as well as to classes.
 
 \subsubsection*{7.1.1. Single Responsibility Principle (SRP)}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.1.1. Single Responsibility Principle (SRP)}
 
-SRP says that a unit should have one cohesive responsibility and one kind of reason to change. It does not mean that a component may perform only one operation.
+A unit should have one cohesive responsibility, so that only one kind of change makes it change. This is different from doing only one operation. Gate Transaction Processor, for example, receives a scan, handles repeated requests, asks for the eligibility check, stores the accepted attempt, and coordinates opening, passage, and closing. It does many things, but all of them belong to one gate transaction, while accounts, shift rules, and reports live in other components.
 
-\textbf{In TMC:}
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item Gate Transaction Processor receives a scan, handles repeated requests, asks for the eligibility check, stores the accepted attempt, and coordinates opening, passage, and closing. All of these belong to one gate transaction; accounts, shift rules, and reports live elsewhere.
-  \item Access Decision only decides eligibility. A change in how the controller is called belongs in Turnstile Adapter.
-  \item Under I-06, shift rules affect Work Schedule Policy and attendance aggregation, not the gate decision. If TMC also wants shifts to restrict physical access, Access Decision needs an explicit access-policy rule, still separate from the QR signature check.
-  \item Attendance Review manages cases and approval authority, while Attendance Consolidation applies the right decision version, prevents duplicates, and keeps links to the original data.
-\end{itemize}
-
-\textbf{Benefit:} a change to the approval workflow or to the controller does not force a rewrite of attendance aggregation or of the gate rules.
+The same idea separates Access Decision from Turnstile Adapter. Access Decision only decides eligibility, so a change in how the controller is called stays in the adapter. Shift rules are kept apart in the same way: under I-06 they affect Work Schedule Policy and attendance aggregation, not the gate decision. If TMC later wants shifts to restrict physical access as well, Access Decision would need an explicit access-policy rule, which should still be separate from the QR signature check. In Attendance, Attendance Review manages cases and approval authority, while Attendance Consolidation applies the right decision version, prevents duplicates, and keeps links to the original data. As a result, a new approval workflow or a new controller can be introduced without rewriting attendance aggregation or the gate rules.
 
 \subsubsection*{7.1.2. Open--Closed Principle (OCP)}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.1.2. Open--Closed Principle (OCP)}
 
-OCP aims to add new capabilities while leaving stable business logic alone. In TMC, the clearest extension points are the two external integrations.
+OCP is about adding behavior by adding code at a known extension point instead of editing the rules that already work. In TMC the clearest extension points are the two external integrations. A new controller that keeps the meaning of the turnstile ports (opening and closing results, passage and lane-clear events, emergency release and reset) only needs a new adapter, and the gate rules stay as they are. In the same way, an HR/Payroll format change that keeps the meaning of IPayrollSubmission only touches HR/Payroll Adapter. Work Schedule Policy plays a similar role for shift and aggregation rules: a change that fits its configuration model is made once, not separately in Attendance and Reporting, but a rule outside that model still needs new code and tests.
 
-\textbf{In TMC:}
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item A new controller that keeps the meaning of the turnstile ports (opening and closing results, passage and lane-clear events, emergency release and reset) only needs a new adapter, and the gate rules do not change.
-  \item An HR/Payroll format change that keeps the meaning of IPayrollSubmission only changes HR/Payroll Adapter.
-  \item Work Schedule Policy keeps shift and aggregation rules in one place, so a change that fits its configuration model is not implemented twice in Attendance and Reporting. A rule outside that model still needs code changes and tests.
-\end{itemize}
-
-\textbf{Limit:} OCP does not mean that code never changes. Since each application is a Modular Monolith, replacing an adapter may still need a new release of that application. The aim is that integration changes do not spread to unrelated components.
+We should be honest about how far this goes. Each application is a Modular Monolith, so even a new adapter is shipped as a new release of that application. What OCP gives us here is that an integration change does not spread into unrelated components.
 
 \subsubsection*{7.1.3. Liskov Substitution Principle (LSP)}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.1.3. Liskov Substitution Principle (LSP)}
 
-LSP says that a replacement must keep the behavior its consumers rely on; matching method names and types is not enough.
+For an adapter, LSP means that Gate Core or Payroll Handover should not be able to tell which implementation it is talking to. Having the right method names is the easy part. The hard part is keeping the meaning of each result, because Gate Core decides on attendance and safety from these results.
 
-\Needspace{6\baselineskip}
-\textbf{In TMC:} a replacement adapter must keep this behavior:
+For the turnstile ports, a replacement adapter has to keep the following rules:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item For the turnstile ports, a command receipt is not OPEN\_CONFIRMED. openGate returns only OPEN\_CONFIRMED, CONTROLLER ERROR when the controller explicitly confirms it did not open, or UNDETERMINED. Passage is a later event, LANE\_CLEAR allows closeGate, and only the controller's close confirmation means CLOSED. emergencyRelease succeeds only on EMERGENCY\_RELEASED, and resetEmergency only on RESET\_CONFIRMED. Both can instead return explicit CONTROLLER ERROR or UNDETERMINED; requesting reset alone never ends the hold. A timeout after the command may have been sent stays undetermined.
-  \item Gate Core records automatic attendance only when the passage event of I-01 is received and stored. A controller without reliable passage evidence cannot satisfy I-07 by returning an opening confirmation.
-  \item For IPayrollSubmission, a receipt acknowledgement (I-02) only proves that HR/Payroll received that batch. When every mandatory part of the period is in CONFIRMED batches, the handover is complete (Flow C). IC-01 also needs the data to be ready for reconciliation before noon, so either the acknowledgement contract must guarantee this or HR/Payroll must give separate evidence; this has to be agreed with its owner.
-  \item Status queries are used only where the API supports them. If a controller lacks the passage or safe-closing behavior assumed in I-01 and I-05, the integration is revised, and reconciliation is used where automatic attendance cannot be justified.
+  \item openGate returns OPEN\_CONFIRMED only when the controller confirms the opening. A command receipt is not enough. The other results are CONTROLLER\_ERROR, used only when the controller confirms that it did not open, and UNDETERMINED for everything else, including a timeout after the command may have been sent.
+  \item Passage is a later event. LANE\_CLEAR allows closeGate, and only the controller's close confirmation means CLOSED.
+  \item emergencyRelease succeeds only on EMERGENCY\_RELEASED, and resetEmergency only on RESET\_CONFIRMED. Either one can return CONTROLLER\_ERROR or UNDETERMINED instead, and asking for a reset does not by itself end the hold.
 \end{itemize}
 
-\textbf{Benefit:} an adapter that passes the same contract tests can replace the old one without any change in Gate Core or Payroll Handover.
+These rules matter for attendance too. Gate Core records automatic attendance only when the passage event of I-01 is received and stored, so a controller without reliable passage evidence cannot satisfy I-07 just by confirming that the gate opened. Status queries are used only where the controller API supports them. If a controller lacks the passage or safe-closing behavior assumed in I-01 and I-05, the integration has to be revised, and cases where automatic attendance cannot be justified go to reconciliation.
+
+IPayrollSubmission has the same kind of rule. A receipt acknowledgement (I-02) only proves that HR/Payroll received that batch, and the handover is complete only when every mandatory part of the period is in CONFIRMED batches (Flow C). IC-01 also needs the data to be ready for reconciliation before noon, so either the acknowledgement contract must guarantee this or HR/Payroll must give separate evidence. This still has to be agreed with the owner of that system. If a new adapter passes the same contract tests, it can replace the old one without any change in Gate Core or Payroll Handover.
 
 \Needspace{13\baselineskip}
 \subsubsection*{7.1.4. Interface Segregation Principle (ISP)}
@@ -72,38 +55,24 @@ LSP says that a replacement must keep the behavior its consumers rely on; matchi
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.1.4. Interface Segregation Principle (ISP)}
 
-ISP says that a consumer should depend only on the operations it uses.
-
-\Needspace{6\baselineskip}
-\textbf{In TMC:} the grouped interfaces in Table 4.20 are split into narrower design contracts:
+A consumer should only see the operations it actually calls. Table 4.20 lists the public interfaces in groups, and in the design each group is split into narrower contracts:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Turnstile ports:} Gate Core defines narrow contracts instead of one large interface. IOpenGate (openGate with a time limit), ICloseGate (closeGate), and IEmergencyGate (emergencyRelease and reset) are commands that return their results, and Turnstile Adapter implements them against the verified controller API (I-01, I-05). IPassageEvents (PASSAGE and LANE\_CLEAR) runs the other way: Gate Core implements it, and Turnstile Adapter calls it when the controller reports these events. Gate Transaction Processor uses the normal-cycle contracts, and the emergency coordinator uses IEmergencyGate. IControllerStatusQuery is a separate optional contract, used only where the controller API supports it.
-  \item \textbf{GateCoreApi:} IScanSubmission for Station Client, IInterventionRequest for Gate Intervention (support case, assisted opening, emergency release and reset), and IFactoryUpdates for Site Sync.
-  \item \textbf{Other APIs:} AttendanceApi separates review and approval from period-data queries, AuthorizationApi separates account administration from authorization checks, and AuditApi separates record intake from queries.
+  \item \textbf{Turnstile ports.} IOpenGate (openGate with a time limit), ICloseGate (closeGate), and IEmergencyGate (emergencyRelease and reset) are commands that return their results, and Turnstile Adapter implements them against the verified controller API (I-01, I-05). IPassageEvents (PASSAGE and LANE\_CLEAR) goes the other way: Gate Core implements it, and Turnstile Adapter calls it when the controller reports these events. Gate Transaction Processor uses the normal-cycle contracts, and the emergency coordinator uses IEmergencyGate. IControllerStatusQuery is a separate optional contract, used only where the controller API supports it.
+  \item \textbf{GateCoreApi.} IScanSubmission is for Station Client, IInterventionRequest is for Gate Intervention (support case, assisted opening, emergency release and reset), and IFactoryUpdates is for Site Sync.
+  \item \textbf{Other APIs.} AttendanceApi separates review and approval from period-data queries, AuthorizationApi separates account administration from authorization checks, and AuditApi separates record intake from queries.
 \end{itemize}
 
-\textbf{Benefit:} each consumer sees only the operations it needs, so a change to one contract does not affect the other consumers.
-
-\textbf{Limit:} these are design contracts, not a security control on their own. Server-side authorization still checks every operation and data scope.
+With this split, a change to one contract only affects the consumer that uses it. These contracts are a design boundary, though, and not a security control. Server-side authorization still checks every operation and data scope, as described in Section 7.4.
 
 \subsubsection*{7.1.5. Dependency Inversion Principle (DIP)}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.1.5. Dependency Inversion Principle (DIP)}
 
-Business code should depend on abstractions that it defines, not on the details of external systems.
+Business code should depend on abstractions that it defines itself, and the details of external systems should plug into them. Gate Transaction Processor depends on the command ports that Gate Core defines (IOpenGate, ICloseGate, IEmergencyGate), not on the Controller API format. Turnstile Adapter reports events back through IPassageEvents, which Gate Core also defines, so in both directions the arrows point to Gate Core. Storage works the same way. A unit-of-work port (IUnitOfWork) owns each transaction, so reserving the lane, claiming the token, and storing ACCEPTED happen in one write while Gate Transaction Processor does not know which database is behind it. Payroll Handover likewise depends on IPayrollSubmission and knows nothing about HR/Payroll connection details or response structures.
 
-\textbf{In TMC:}
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item Gate Transaction Processor depends on the command ports that Gate Core defines (IOpenGate, ICloseGate, IEmergencyGate), not on the Controller API format. Turnstile Adapter reports events back through IPassageEvents, which Gate Core also defines, so both directions point to Gate Core's abstractions.
-  \item Gate Core also defines its storage ports. A unit-of-work port (IUnitOfWork) owns each transaction, so reserving the lane, claiming the token, and storing ACCEPTED happen in one write without Gate Transaction Processor knowing which database is used.
-  \item Payroll Handover depends on IPayrollSubmission without knowing HR/Payroll connection details or response structures.
-  \item Test adapters return command outcomes and deliver PASSAGE and LANE\_CLEAR through IPassageEvents. Receipt-only and timeout cases produce UNDETERMINED. A shared contract test suite checks substitution; integration tests check these meanings against the real controller.
-\end{itemize}
-
-\textbf{Limit:} not every internal call needs an interface. We add an abstraction only when it supports substitution, testing, or isolation of a real dependency.
+This also makes testing easier. Test adapters return command outcomes and deliver PASSAGE and LANE\_CLEAR through IPassageEvents, and receipt-only and timeout cases produce UNDETERMINED. A shared contract test suite checks that adapters can be swapped, and integration tests check the same meanings against the real controller. We add an interface only when it helps substitution, testing, or isolating a real dependency. Ordinary calls inside a module stay direct.
 
 \Needspace{9\baselineskip}
 \subsection*{7.2. Cohesion, Coupling and Extensibility}
@@ -116,14 +85,7 @@ Business code should depend on abstractions that it defines, not on the details 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.2.1. High Cohesion}
 
-
-Functions belong in the same module when they serve related responsibilities:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item Gate Core concentrates on scan processing at a factory, Attendance on recording, review, and aggregation, and Payroll Handover on preparing data and tracking its delivery.
-  \item Inside a module, components keep distinct responsibilities. Access \& Configuration manages several kinds of business data, but QR issuance, access rights, stations, and shift policy are separate components.
-  \item Modules are not built around data entities. There is no ``Employee module'': employee data is used in several places, but access decisions, aggregation, and account administration change for different reasons.
-\end{itemize}
+Functions are grouped by the responsibility they serve. Gate Core focuses on scan processing at a factory, Attendance on recording, review, and aggregation, and Payroll Handover on preparing data and tracking its delivery. Inside a module the components still have separate jobs. Access \& Configuration, for example, manages several kinds of business data, but QR issuance, access rights, stations, and shift policy are separate components. We also did not build modules around data entities. There is no ``Employee module'', because employee data is used in many places, and access decisions, aggregation, and account administration change for different reasons.
 
 \Needspace{8\baselineskip}
 \subsubsection*{7.2.2. Low Coupling}
@@ -131,15 +93,9 @@ Functions belong in the same module when they serve related responsibilities:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.2.2. Low Coupling}
 
+We keep coupling only where the flow really needs it. In the gate flow, the kiosk waits synchronously for just two things: the eligibility check and the opening confirmation. Passage recording and safe closure run after the kiosk has its answer. Gate Core stores source records and outgoing events at the factory, and Site Sync moves them later, so the kiosk never waits for central consolidation.
 
-Coupling is kept where it is needed and removed elsewhere:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item The gate flow waits synchronously only for the eligibility check and the opening confirmation. Passage recording and safe closure run independently of the kiosk response.
-  \item Gate Core stores source records and outgoing events at the factory, and Site Sync moves them later, so the kiosk never waits for central consolidation.
-  \item Events reduce waiting but do not make producers and consumers independent. Both sides still depend on event structures, versions, progress, and acknowledgement rules, so contract changes are checked on both sides.
-  \item Deploying three applications does not by itself create three independent quanta; Chapter 3 judges quanta from the actual dependencies.
-\end{itemize}
+Events reduce waiting, but they still couple the two sides through event structures, versions, progress, and acknowledgement rules. A contract change is therefore checked on both the producer and the consumer. In the same way, three deployed applications are not automatically three independent quanta, and Chapter 3 decides the quanta from the actual dependencies.
 
 \Needspace{15\baselineskip}
 \subsubsection*{7.2.3. Extensibility}
@@ -147,8 +103,7 @@ Coupling is kept where it is needed and removed elsewhere:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.2.3. Extensibility}
 
-
-Table 7.1 shows how the design handles some hypothetical changes. They are only used to test the boundaries and do not add requirements.
+To check the boundaries, we tried a few hypothetical changes and looked at which parts of the design they touch. Table 7.1 shows the result. These scenarios are only a test of the structure and do not add new requirements.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{75.5pt}|>{\raggedright\arraybackslash}p{158.5pt}|>{\raggedright\arraybackslash}p{176.5pt}|}
 \hline
@@ -168,8 +123,7 @@ Adjust attendance aggregation rules & Update Work Schedule Policy and the releva
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{7.1}Scope of Changes in Selected Extension Scenarios}
 
-
-The boundaries show where a change starts, but impact testing is still needed. Adding a factory, for example, also means configuring event sources, access permissions, verification keys, and data-reception progress. Maintainability stays a supporting characteristic, as in Chapter 2, so we do not add services only to make the design look extensible.
+The table shows where each change starts, but it is not the whole story, and impact testing is still needed. Adding a factory, for example, also means configuring event sources, access permissions, verification keys, and data-reception progress. As in Chapter 2, maintainability is a supporting characteristic, so we did not add extra services just to make the design look more extensible.
 
 \Needspace{9\baselineskip}
 \subsection*{7.3. QR Authentication and Anti-replay}
@@ -177,20 +131,18 @@ The boundaries show where a change starts, but impact testing is still needed. A
 \phantomsection
 \addcontentsline{toc}{subsection}{7.3. QR Authentication and Anti-replay}
 
+Section 5.8.2 explains why a static QR code is risky and lists the threats and the remaining risks (Tables 5.9 and 5.11). This section goes one level deeper and describes how the chosen controls work: how a QR code is issued and checked, how replay is stopped inside and between factories, and what happens when a factory is disconnected.
+
 \subsubsection*{7.3.1. QR Issuance and Validation}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.3.1. QR Issuance and Validation}
 
+QR credentials follow ADR-11 and I-09. An authenticated employee requests a QR code through Employee Portal, and QR Credential Issuance issues a token that is valid for 60 seconds and only at one factory. The 60-second value is our own design policy, not a number from the assignment. Under I-08, company email only links to the authenticated live display, so we never email a reusable QR image. Whether TMC needs the code to be shown directly in email is still to be confirmed.
 
-QR credentials follow ADR-11 and I-09:
+The signed content holds the token identifier, the employee identifier, the permitted factory, and validity information. Names, phone numbers, and attendance details are left out. The private signing key stays at the central site, and factories receive only the public keys they need for verification, so the private key is never copied to kiosks or factory applications. Note that the signature protects integrity and shows who issued the token, but it does not encrypt the content. Algorithms and libraries are chosen during implementation; if JWT is used, aud, exp, and jti can carry the audience, expiry, and token identifier.
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Issuance.} An authenticated employee requests a QR code through Employee Portal, and QR Credential Issuance issues a token valid for 60 seconds and restricted to one factory. The 60-second value is our design policy, not a requirement in the assignment. Under I-08, company email only links to the authenticated live display; we do not email a reusable QR image, and whether direct display in email is required is still to be confirmed.
-  \item \textbf{Content.} The signed content holds the token identifier, the employee identifier, the permitted factory, and validity information. Names, phone numbers, and attendance details are left out.
-  \item \textbf{Signature.} The central site keeps the private signing key, and factories receive only the public keys needed for verification; the private key is never copied to kiosks or factory applications. A signature protects integrity and identifies the issuer, but it does not encrypt the content. Algorithms and libraries are chosen during implementation; if JWT is used, aud, exp, and jti can hold the audience, expiry, and token identifier.
-  \item \textbf{Validation.} Access Decision checks the token structure, issuer, signature, validity period, and factory scope, then checks the employee's status and access rights in Eligibility Snapshot. A valid signature alone is not enough if the employee is blocked, lacks permission, or the access data is no longer usable.
-\end{itemize}
+At the gate, Access Decision checks the token structure, issuer, signature, validity period, and factory scope. It then checks the employee's status and access rights in Eligibility Snapshot. A token with a valid signature is still refused if the employee is blocked, has no permission, or the access data can no longer be used.
 
 \Needspace{9\baselineskip}
 \subsubsection*{7.3.2. Anti-replay within a Factory}
@@ -198,14 +150,13 @@ QR credentials follow ADR-11 and I-09:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.3.2. Anti-replay within a Factory}
 
-
-Duplicate requests and QR replay are different problems: scanId identifies one processing attempt, while tokenId identifies one issued QR code.
+Two problems look similar here but need different handling. A duplicate request is the same scan sent again, while a replay is the same QR code used for a new scan. We use scanId to identify one processing attempt and tokenId to identify one issued QR code:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Same scanId.} If Station Client resends a scanId after a lost response, Gate Transaction Processor returns the stored status without another command or transaction.
-  \item \textbf{Claimed tokenId.} A new scanId with an already claimed tokenId is rejected as a replay. A new token with a different identifier is a new scan, even if it comes soon after another.
-  \item \textbf{Atomic claim.} All lanes of a factory share Gate Core's token-claim data, and the claim is stored in the same transaction as ACCEPTED. Unique constraints make sure that only one scan is accepted when several lanes receive the same token at once; a separate check-then-claim step would leave a race.
-  \item \textbf{No release after uncertainty.} Once claimed, a token never becomes unused again because of a timeout, a lost response, or a restart. The original scan is queried or reconciled instead.
+  \item If Station Client resends a scanId after a lost response, Gate Transaction Processor returns the stored status and does not send another command or start another transaction.
+  \item A new scanId with a tokenId that has already been claimed is rejected as a replay. A token with a different identifier is a new scan, even if it arrives soon after another one.
+  \item All lanes of a factory share Gate Core's token-claim data, and the claim is stored in the same transaction as ACCEPTED. Unique constraints make sure only one scan wins when several lanes receive the same token at the same moment. A separate check-then-claim step would leave a race.
+  \item Once a token is claimed, it stays claimed after a timeout, a lost response, or a restart. In those cases the original scan is queried or reconciled instead.
 \end{itemize}
 
 \Needspace{9\baselineskip}
@@ -214,22 +165,18 @@ Duplicate requests and QR replay are different problems: scanId identifies one p
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.3.3. Anti-replay between Factories}
 
+Each token is tied to one factory, the one named in its signed content. A token issued for Binh Duong is rejected at Long An even if the employee may enter both sites, so the employee simply requests a new token there. The factory used in this check comes from server configuration and the authenticated, registered station, never from a factory field sent by the client. Because each factory only has to track its own tokens, no global token-claim service is needed on every scan.
 
-Each token is tied to one factory:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item A token is valid only at the factory named in its signed content. A token for Binh Duong is rejected at Long An, even if the employee may enter both; the employee requests a separate token there.
-  \item The actual factory comes from server configuration and the authenticated, registered station, not from a factory field sent by the client.
-  \item This avoids a global token-claim service on every scan, because each factory controls only its own tokens.
-  \item Single-use tokens prevent reuse, but they do not stop an employee from sharing an unused image, and they do not prove who is holding the phone.
-\end{itemize}
+Single-use tokens stop reuse, but they have a limit. An employee can still share an unused image, and the token cannot prove who is holding the phone. Table 5.11 records this as a remaining risk.
 
 \subsubsection*{7.3.4. Disconnected Operation and Recovery}
 
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.3.4. Disconnected Operation and Recovery}
 
-QR validity (60 seconds) and the age of eligibility data (normal for 60 seconds, then degraded while the last confirmed update is less than 30 minutes old) are separate limits; Section 5.7.2 gives the full conditions. QR Credential Issuance stays central, so new tokens need that application. After failover or a backup restore, Gate Core accepts scans only when the token-claim state is consistent; otherwise the factory follows the manual procedure. Cleaning up claim data must never make a token that could still be accepted look unused, so expiry, clock error, and recovery are considered before claim state is deleted. The same holds when a scan stops after ACCEPTED because its deadline passed before openGate: the lane is released, but the token stays claimed.
+Two time limits are easy to mix up here. QR validity is 60 seconds. The age of eligibility data is a separate limit: the data is normal for 60 seconds, then degraded while the last confirmed update is less than 30 minutes old (Section 5.7.2 gives the full conditions). QR Credential Issuance stays central, so new tokens always need that application.
+
+Recovery has to protect the claim state. After failover or a backup restore, Gate Core accepts scans only when the token-claim state is consistent, and otherwise the factory follows the manual procedure. When old claim data is cleaned up, expiry, clock error, and recovery are taken into account first, so a token that could still be accepted is never made to look unused. The same rule applies when a scan stops after ACCEPTED because its deadline passed before openGate: the lane is released, but the token stays claimed.
 
 \Needspace{9\baselineskip}
 \subsection*{7.4. Role-based and Scoped Access Control}
@@ -237,8 +184,7 @@ QR validity (60 seconds) and the age of eligibility data (normal for 60 seconds,
 \phantomsection
 \addcontentsline{toc}{subsection}{7.4. Role-based and Scoped Access Control}
 
-
-Permission to use TMC functions is different from permission to enter a factory. Identity \& RBAC decides which operations and data a user may access, while Access Decision checks physical access rights in the QR flow. Table 7.2 summarizes the boundaries for the six user groups; exact permissions follow TMC's approved authority and job scope.
+TMC has two kinds of permission that should not be confused. Permission to use TMC functions is decided by Identity \& RBAC, which controls the operations and data a user may access. Permission to enter a factory is checked by Access Decision in the QR flow. Table 7.2 summarizes the boundaries for the six user groups, and the exact permissions follow TMC's approved authority and job scope.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{75.5pt}|>{\raggedright\arraybackslash}p{190.5pt}|>{\raggedright\arraybackslash}p{145.5pt}|}
 \hline
@@ -262,15 +208,9 @@ Executive Management & View authorized reports and aggregated information. & Det
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{7.2}Permission Boundaries by User Group}
 
+A few rules apply to every group. Authorization is enforced at the server, and hiding a button in the user interface is only a convenience. For each request the server checks the action, the target, and the scope, such as the factory, the assigned unit, or the user's own records. Permission to view a report, for instance, does not include permission to export all employee data.
 
-\Needspace{6\baselineskip}
-The following rules apply to all groups:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Server-side checks.} Authorization is enforced at the server, not by hiding buttons. The server checks the action, the target, and the scope, such as the factory, the assigned unit, or the user's own records. Viewing a report does not include permission to export all employee data.
-  \item \textbf{Device identity.} Station Client may submit and query scans only for its registered station and cannot call approval or administration functions. A station identity and an employee's QR token do not replace each other.
-  \item \textbf{No login per scan.} The QR flow does not need a central user login for each scan: the station is authenticated as a device, and eligibility is checked at the factory. Software-based assistance and emergency operations still need authorization, and the check is never bypassed when it cannot be completed.
-\end{itemize}
+Devices are handled in a similar way. Station Client may submit and query scans only for its registered station, and it cannot call approval or administration functions. A station identity and an employee's QR token are two different things, and one cannot stand in for the other. This is also why the QR flow does not need a central user login for each scan: the station is authenticated as a device, and eligibility is checked at the factory. Software-based assistance and emergency operations still need authorization, and if that check cannot be completed, the operation is refused rather than allowed.
 
 \Needspace{9\baselineskip}
 \subsection*{7.5. Audit Logging and Personal Data Protection}
@@ -283,15 +223,9 @@ The following rules apply to all groups:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.5.1. Audit Content}
 
+An audit record should let someone reconstruct an event later: the user or device that acted, the action, the target object, the time, and the outcome. TMC records authentication, access denials, gate results, assistance and emergency operations, access-right changes, adjustment approvals, and HR/Payroll handover. Besides the basic fields, each record carries correlation identifiers so that related records can be joined: scanId, commandId, and eventId for scans, and the decision or batch identifier with its version for cases and batches.
 
-Audit records answer who did what, to which object, when, and with what result:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{What is recorded.} Authentication, access denials, gate results, assistance and emergency operations, access-right changes, adjustment approvals, and HR/Payroll handover.
-  \item \textbf{Record fields.} The acting user or device, the action, the target, the time, the outcome, and correlation identifiers: scanId, commandId, and eventId for scans, and the decision or batch identifier with its version for cases and batches.
-  \item \textbf{Event time.} The actual event time is kept apart from the time of later data entry, so a record entered after an incident does not suggest that the entry or exit happened later.
-  \item \textbf{What is never logged.} Complete QR tokens, passwords, signing keys, and authentication secrets. Personal data and case details appear only when needed for traceability, and free-text fields are escaped so that they cannot break the log structure.
-\end{itemize}
+The actual event time is stored separately from the time the data was entered. Otherwise a record entered after an incident would make it look as if the entry or exit happened later. Some data is never written to the log at all: complete QR tokens, passwords, signing keys, and authentication secrets. Personal data and case details appear only when they are needed for traceability, and free-text fields are escaped so that they cannot break the log structure.
 
 \Needspace{9\baselineskip}
 \subsubsection*{7.5.2. Durable Audit and Business History}
@@ -299,15 +233,9 @@ Audit records answer who did what, to which object, when, and with what result:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.5.2. Durable Audit and Business History}
 
+Audit evidence has to survive as long as the business data it describes, so it is committed together with the factory business change. Flow A defines the recording order and how write failures are handled. The evidence is durable from that commit, and central delivery comes later. Audit records reach Audit Log asynchronously. While a transfer is interrupted, the source keeps the evidence, and scans continue only while local durability and the operating conditions of Chapter 5 still hold.
 
-Audit evidence is kept as durably as the business data it describes:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Evidence at the source.} Audit evidence is committed with the factory business change it describes. The recording order and write-failure handling are defined in Flow A; central delivery is not the point at which this evidence becomes durable.
-  \item \textbf{Asynchronous delivery.} Audit records reach Audit Log asynchronously. During an interrupted transfer, the source retains the evidence; scans continue only while local durability and the operating conditions of Chapter 5 hold.
-  \item \textbf{No double records.} A resent event keeps its identifier, so the consumer does not create a second audit record. A broker acknowledgement does not prove that the business change was applied.
-  \item \textbf{History is kept.} Adjustment history keeps the original data, the approved decision, and the application result. Reconciliation never overwrites original evidence, and the trail separates an approved case from a decision that has actually been applied.
-\end{itemize}
+Resending must not create duplicates. A resent event keeps its identifier, so the consumer does not create a second audit record. We also treat a broker acknowledgement only as proof of delivery, not as proof that the business change was applied. For attendance adjustments, the history keeps the original data, the approved decision, and the application result. Reconciliation adds to this history and leaves the original evidence untouched, and the trail shows clearly whether an approved case has actually been applied.
 
 \Needspace{9\baselineskip}
 \subsubsection*{7.5.3. Audit Access and Integrity}
@@ -315,16 +243,9 @@ Audit evidence is kept as durably as the business data it describes:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.5.3. Audit Access and Integrity}
 
+Reading audit data is itself a sensitive action, so it is controlled and recorded. Reporting checks permissions through Identity \& RBAC before calling AuditApi.query, and each query is limited to the authorized scope. Audit Log does not call Identity \& RBAC back, which avoids a cyclic dependency. This is the only way to reach audit data: users cannot query the database directly or go around Reporting, and permission to write audit records does not include permission to read the whole history.
 
-Access to audit data is controlled and itself traceable:
-
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item Reporting checks permissions through Identity \& RBAC before calling AuditApi.query, and queries are limited to the authorized scope. Audit Log does not call Identity \& RBAC back, which avoids a cyclic dependency.
-  \item Audit data is reachable only through this path; users cannot query the database directly or bypass Reporting. Permission to write audit records does not include permission to read the whole history.
-  \item Storage permissions, restricted accounts, and change detection protect records against modification or deletion, and access to, administration of, and disposal of audit data are recorded as well.
-  \item Protection does not mean keeping data forever. Expired data is removed under an approved policy, and technical administrators get no default right to delete business history.
-  \item Monitoring data such as latency, errors, and status helps to detect incidents but does not replace evidence of who approved what.
-\end{itemize}
+Storage permissions, restricted accounts, and change detection protect the records against modification or deletion. Access to audit data, its administration, and its disposal are all recorded as well. Keeping records safe is different from keeping them forever, so expired data is removed under an approved policy, and technical administrators have no default right to delete business history. Monitoring data such as latency, errors, and status helps to detect incidents, but it is not evidence of who approved what.
 
 \Needspace{9\baselineskip}
 \subsubsection*{7.5.4. Personal Data Protection}
@@ -332,13 +253,12 @@ Access to audit data is controlled and itself traceable:
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.5.4. Personal Data Protection}
 
-
-For deployment in Vietnam, we use Law No. 91/2025/QH15 on Personal Data Protection and Decree No. 356/2025/ND-CP as the legal baseline. Article 3(2)--(4) of the Law covers defined purposes, suitable retention, and safeguards, and Article 25(2)--(3) covers employee-data retention and informing employees about the technical measures used to manage them.\footnote{Official texts: \href{https://congbaocdn.chinhphu.vn/CongBaoCP/CongBao/2025/7/45574/57723-1-971-972.pdf}{Law No. 91/2025/QH15}; \href{https://vanban.chinhphu.vn/?classid=1\&docid=216387\&pageid=27160}{Decree No. 356/2025/ND-CP}.} The design applies them as follows:
+For deployment in Vietnam, we use Law No. 91/2025/QH15 on Personal Data Protection and Decree No. 356/2025/ND-CP as the legal baseline. Article 3(2)--(4) of the Law covers defined purposes, suitable retention, and safeguards, and Article 25(2)--(3) covers employee-data retention and informing employees about the technical measures used to manage them.\footnote{Official texts: \href{https://congbaocdn.chinhphu.vn/CongBaoCP/CongBao/2025/7/45574/57723-1-971-972.pdf}{Law No. 91/2025/QH15}; \href{https://vanban.chinhphu.vn/?classid=1\&docid=216387\&pageid=27160}{Decree No. 356/2025/ND-CP}.} In the design we apply these articles in five ways:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Collect only what is needed.} TMC collects and transfers only the data needed for access control, attendance, reconciliation, and handover. Eligibility Snapshot does not hold the full HR record, and a QR token does not carry data that can be looked up by employee identifier.
-  \item \textbf{Show only what is needed.} Kiosks show only the scan result, not attendance details or HR reasons. Employees see their own records, management reports use aggregates where individual detail is not needed, and export is a separate permission.
-  \item \textbf{Protect every copy.} Connections between clients, applications, the broker, and external systems are protected, and databases, replicas, outboxes, and backups are inside the protection scope. Keys and credentials never appear in source code, diagrams, or logs, and application accounts get only the permissions they need.
-  \item \textbf{Identifiers are still personal data.} Using an employee identifier instead of a name reduces what is visible, but the data can still be linked to a person, and a signature does not hide the token content.
-  \item \textbf{Retention is TMC's decision.} TMC must approve retention, access, and deletion rules for attendance, assistance, audit, and backup data before operation. We do not impose one common retention period without a basis.
+  \item TMC collects and transfers only the data needed for access control, attendance, reconciliation, and handover. Eligibility Snapshot does not hold the full HR record, and a QR token does not carry data that can be looked up by employee identifier.
+  \item Each screen shows only what its user needs. Kiosks show the scan result without attendance details or HR reasons, employees see their own records, management reports use aggregates where individual detail is not needed, and export is a separate permission.
+  \item Every copy of the data is protected. Connections between clients, applications, the broker, and external systems are protected, and databases, replicas, outboxes, and backups are inside the protection scope. Keys and credentials are kept out of source code, diagrams, and logs, and application accounts get only the permissions they need.
+  \item Employee identifiers are still personal data. Showing an identifier instead of a name reduces what is visible, but the data can still be linked to a person, and the token signature does not hide its content.
+  \item Retention is TMC's decision. TMC must approve retention, access, and deletion rules for attendance, assistance, audit, and backup data before operation, and we do not set one common retention period without a legal or business basis.
 \end{itemize}
