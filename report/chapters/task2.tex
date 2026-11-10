@@ -328,7 +328,7 @@ The tables above show what exists, but not in which order things happen. In this
   \item[\textbf{A9}] Closing waits for LANE\_CLEAR, whether or not a passage was recorded. The signal arrives at \code{/api/controller/signals/lane-clear}, and onLaneClear first stores CLOSE\_SENT and the closeCommandId. Only then does it call closeGate. The lane becomes free again when the result is CLOSED.
 \end{itemize}
 
-We also ran these steps by hand against a real \texttt{uvicorn} server in demo mode, with \code{TMC_GATE_DB} pointing to a SQLite file and the simulated controller. Figure 9.5 shows the run. We took a signed QR code for employee EMP-001 from the demo endpoint and used it twice: S-1 on LANE-BD-01 was OPENED (a), and S-2 with the same code on LANE-BD-02 was REJECTED with QR\_TOKEN\_REPLAY\_DETECTED (b). We then played the controller and sent PASSAGE and LANE\_CLEAR twice each for the commandId of S-1 (c). The HTTP answers alone do not show that the repeats were ignored, so in (d) we opened the database file with a separate connection. It holds one attendance record, linked to S-1 and passage event PE-1, one passage event, and exactly one OPEN and one CLOSE command. Table 9.8 in Section 9.7 sums up what each part of the run shows.
+We also ran these steps by hand on a team member's Windows laptop, against a real \texttt{uvicorn} server in demo mode, with \code{TMC_GATE_DB} pointing to a SQLite file and the simulated controller. The server ran in one PowerShell window and the client in a second one, using the script \code{report/evidence/run_demo.py}. Figure 9.5 is a screenshot of the second window. The script first marks the access data as just confirmed, because the prototype has no Site Sync and the server only treats its data as fresh at start-up; without this step a run started more than 60 seconds after the server would come out DEGRADED. We took a signed QR code for employee EMP-001 from the demo endpoint and used it twice: S-1 on LANE-BD-01 was OPENED (a), and S-2 with the same code on LANE-BD-02 was REJECTED with QR\_TOKEN\_REPLAY\_DETECTED (b). We then played the controller and sent PASSAGE and LANE\_CLEAR twice each for the commandId of S-1 (c). The HTTP answers alone do not show that the repeats were ignored, so in (d) we opened the database file with a separate connection. It holds one attendance record, linked to S-1 and passage event PE-1, one passage event, and exactly one OPEN and one CLOSE command. Table 9.8 in Section 9.7 sums up what each part of the run shows.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
@@ -341,8 +341,9 @@ We also ran these steps by hand against a real \texttt{uvicorn} server in demo m
 
 \vspace{10pt}
 
-The run in Figure 9.5 only covers the normal path. We ran two more scripts on a fresh SQLite file to show what happens when something is not normal. In Figure 9.6 we first aged the access data to 300 seconds: scan S-10 was still OPENED, but with the degraded flag, and the attendance record created from its passage carries the same flag (a). At 1800 seconds the next scan was refused with CANNOT\_PROCESS before any command (b). We then made the access data fresh again and set the simulated controller so that openGate times out and the status query cannot tell the result. Scan S-12 ended as PENDING\_RECONCILIATION, and a new scan on the same lane got LANE\_BUSY because the lane stays held (c). The database shows a single OPEN command for S-12 with the outcome UNDETERMINED (d).
+The run in Figure 9.5 only covers the normal path. We ran the same script twice more, each time with a fresh SQLite file, to show what happens when something is not normal. In Figure 9.6 we first aged the access data to 300 seconds: scan S-10 was still OPENED, but with the degraded flag, and the attendance record created from its passage carries the same flag (a). At 1800 seconds the next scan was refused with CANNOT\_PROCESS before any command (b). We then made the access data fresh again and set the simulated controller so that openGate times out and the status query cannot tell the result. Scan S-12 ended as PENDING\_RECONCILIATION, and a new scan on the same lane got LANE\_BUSY because the lane stays held (c). The database shows a single OPEN command for S-12 with the outcome UNDETERMINED (d).
 
+\begin{landscape}
 \noindent\begin{minipage}{\linewidth}
 \centering
 \includegraphics[width=\linewidth]{figure/figure-9-6-degraded-undetermined-run.png}
@@ -351,11 +352,13 @@ The run in Figure 9.5 only covers the normal path. We ran two more scripts on a 
 \textbf{Figure 9.6. Degraded Mode, CANNOT\_PROCESS, and an Uncertain Opening on Uvicorn}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.6}Degraded Mode and an Uncertain Opening on Uvicorn}
 \end{minipage}
+\end{landscape}
 
 \vspace{10pt}
 
 Figure 9.7 runs the local part of Flow B. An assisted opening without a guard session gets HTTP 401 (a). With the session, the same request sent twice returns the same commandId both times (b). We then played the controller for this assisted opening and sent a PASSAGE right away, well inside the 15-second window, followed by LANE\_CLEAR (c). For a QR scan the same two signals created an attendance record in Figure 9.5. An emergency release puts LANE-BD-01 in EMERGENCY\_HOLD, and a QR scan on that lane gets LANE\_BUSY (d). After the reset and a LANE\_CLEAR the gate is closed and the next scan is OPENED again (e). In the database (f), case-001 has one stored OPEN command and one CLOSE command, the passage PE-30 is stored without a review reason, and there is still no attendance record. So a timely passage through an assisted opening did not create attendance by itself. The run does not show the later HR approval step, which is outside the prototype.
 
+\begin{landscape}
 \noindent\begin{minipage}{\linewidth}
 \centering
 \includegraphics[width=\linewidth]{figure/figure-9-7-flow-b-run.png}
@@ -364,6 +367,7 @@ Figure 9.7 runs the local part of Flow B. An assisted opening without a guard se
 \textbf{Figure 9.7. Flow B on Uvicorn: Guard Session, Assisted Opening with a Passage, and Emergency Hold}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.7}Flow B on Uvicorn}
 \end{minipage}
+\end{landscape}
 
 \vspace{10pt}
 
@@ -452,11 +456,11 @@ Table 9.7 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.7}Test Results of the Submitted Version}
-The ``+1'' in the Package 5 row is the expected failure, and it is there on purpose: it is the adapter that treats a receipt as an opening, and the test shows that it breaks the turnstile contract (Section 9.4). CI on GitHub Actions runs the same suite on every push and pull request, and it was green on this commit. Figure 9.8 is the output of the same suite, run again on the final report commit, where the code is unchanged from 5bd6721.
+The ``+1'' in the Package 5 row is the expected failure, and it is there on purpose: it is the adapter that treats a receipt as an opening, and the test shows that it breaks the turnstile contract (Section 9.4). CI on GitHub Actions runs the same suite on every push and pull request, and it was green on this commit. Figure 9.8 is the output of the same suite, run again on the same Windows laptop on the final report commit, where the code is unchanged from 5bd6721. That laptop has Python 3.13, while CI uses Python 3.12, and the result is the same on both.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\includegraphics[width=0.72\linewidth]{figure/figure-9-8-pytest-run.png}
+\includegraphics[width=0.92\linewidth]{figure/figure-9-8-pytest-run.png}
 
 \vspace{6pt}
 \textbf{Figure 9.8. Output of the Test Suite: 473 Passed and 1 Expected Failure}
@@ -478,7 +482,7 @@ The ten tests in \code{test_e2e_sqlite_flows.py} are the closest our automated t
 For Flow B they show that a request without a guard session gets HTTP 401, that an assisted opening stores the support case once and creates no attendance, and that an emergency hold makes new scans return LANE\_BUSY until the reset, after which LANE\_CLEAR closes the gate. One rule has no end-to-end test: a PASSAGE that arrives after the 15-second window. It is checked only at processor level (\code{test_pkg3_rules.py}) and for storage (\code{test_pkg4_sqlite_repos.py}).
 
 
-We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The three manual runs in Section 9.5 (Figures 9.5 to 9.7) were done on a real Uvicorn server with a SQLite file. Table 9.8 lists what each part of them shows. The order of the writes before openGate and the single closeGate call are checked by the tests in Table 9.6, not by this run. The scripts, the captured output, and the Uvicorn logs are kept in \code{report/evidence/}. Clicking through the Swagger page during the presentation is still a manual step.
+We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The three manual runs in Section 9.5 (Figures 9.5 to 9.7) were done on a real Uvicorn server with a SQLite file. Table 9.8 lists what each part of them shows. The order of the writes before openGate and the single closeGate call are checked by the tests in Table 9.6, not by this run. The scripts are kept in \code{report/evidence/}: \code{run_demo.py}, which produced the figures, and bash versions of the same runs together with the captured output and Uvicorn logs of an earlier run, which differ from the figures only in generated ids and times. Clicking through the Swagger page during the presentation is still a manual step.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{36pt}|>{\raggedright\arraybackslash}p{124pt}|>{\raggedright\arraybackslash}p{134pt}|>{\raggedright\arraybackslash}p{104pt}|}
 \hline
