@@ -242,18 +242,29 @@ Only one port was added after that point. While checking the code before submiss
 The tables above show what exists, but not in which order things happen. In this section we follow one QR scan from the kiosk request to the closed gate. Each step carries the label of the matching step in the design sequence of Figure 4.16 and Section 4.2.2, so the two descriptions can be read side by side. The classes are the ones in Figures 4.18 and 4.19.
 
 \begin{itemize}[leftmargin=36pt, labelwidth=22pt, labelsep=8pt, align=left, itemsep=3pt, topsep=4pt, parsep=2pt]
-  \item[\textbf{A1}] The kiosk sends \code{POST /api/gate/scans} with a scanId, the QR text, and the laneId. The route only holds an IScanSubmission, so it calls GateCoreFacade.submitScan, which hands the scan to GateTransactionProcessor.processScan. From here the processor counts down a 2-second budget, and every later step only gets the time that is left.
+  \item[\textbf{A1}] The kiosk sends \code{POST /api/gate/scans} with a scanId, the QR text, and the laneId. The route only holds an IScanSubmission, so it calls GateCoreFacade.submitScan, which hands the scan to GateTransactionProcessor.processScan. From here the processor counts down a processing budget, and every later step only gets the time that is left. The HTTP route does not pass a kiosk deadline, so this budget is a full 2,000 ms that starts when processScan begins (Section 9.8).
   \item[\textbf{A2}] The processor first looks the scanId up in storage. If the kiosk is retrying a request whose answer was lost, the stored result is returned unchanged and nothing else runs.
   \item[\textbf{A3}] AccessDecision.evaluate reads the current EligibilitySnapshot and checks the operating mode first. If the access data is too old or the clock error is too large, the answer is CANNOT\_PROCESS before the QR code is even read. Otherwise it verifies the Ed25519 signature, the 60-second expiry, and the factory of the token, and then asks the snapshot whether this employee may use this lane. A scan that fails is stored as REJECTED or CANNOT\_PROCESS with an audit record, and the kiosk gets the reason.
   \item[\textbf{A4}] For an allowed scan the processor prepares four records: the ACCEPTED ScanAttempt, a TokenReservation for the tokenId, a new GateCycle for the lane, and the OPEN GateCommand. SqliteScanRepository writes all four in one transaction. If the lane already has an active cycle, nothing is written and the answer is LANE\_BUSY. If the tokenId has been claimed before, for example by a copy of the QR code on another lane, the scan is stored as REJECTED with the reason QR\_TOKEN\_REPLAY\_DETECTED.
   \item[\textbf{A5}] Only after this commit does the processor call openGate, with a timeout of min(700 ms, time left). If no time is left at this point, the command is not sent: the scan ends as CANNOT\_PROCESS and the lane is released, but the token stays claimed.
   \item[\textbf{A6}] The controller result decides the next state. With OPEN\_CONFIRMED the scan becomes OPENED and the 15-second passage window starts; the outbox event and the audit record go into the same transaction. With CONTROLLER\_ERROR the lane is released. An UNDETERMINED result is stored first, and the controller is asked once through IControllerStatusQuery where the adapter supports it. If there is no status query, or the answer is still unclear, the scan becomes PENDING\_RECONCILIATION.
-  \item[\textbf{A7}] processScan returns this state to the route, and the kiosk receives it in the HTTP response. This is where the 2-second budget of NFR-01 ends. Returning the opening result does not create attendance. Attendance is recorded separately when a valid PASSAGE is processed, independently of when the kiosk receives its response.
+  \item[\textbf{A7}] processScan returns this state to the route, and the kiosk receives it in the HTTP response. This is where the server-side part of the scan ends. NFR-01 itself is measured until the kiosk displays the result (Section 1.7), and the prototype does not measure that. Returning the opening result does not create attendance. Attendance is recorded separately when a valid PASSAGE is processed, independently of when the kiosk receives its response.
   \item[\textbf{A8}] Attendance comes from the passage, not from the opening. When the employee walks through, the controller calls \code{POST /api/controller/signals/passage}. This request reaches onPassage on the processor through IPassageEvents, and it is handled on its own, separately from the kiosk request. In one transaction the processor stores the PassageEvent and, if the scan is still OPENED and the window has not ended, the AttendanceTransaction. A passage that comes too late is still stored, but with the review reason LATE\_PASSAGE and without attendance. If no PASSAGE arrives at all, PassageTimeoutWorker, which wakes up every 0.25 seconds, makes the processor mark the cycle as NO\_PASSAGE and the scan as PENDING\_RECONCILIATION once the 15 seconds are over. The worker does not close the gate.
   \item[\textbf{A9}] Closing waits for LANE\_CLEAR, whether or not a passage was recorded. The signal arrives at \code{/api/controller/signals/lane-clear}, and onLaneClear first stores CLOSE\_SENT and the closeCommandId. Only then does it call closeGate. The lane becomes free again when the result is CLOSED.
 \end{itemize}
 
-We also ran these steps by hand against the server started with \texttt{uvicorn} (demo mode, SQLite in memory), using the demo endpoint to get a signed QR code for employee EMP-001. The answers matched the steps above. The first scan on LANE-BD-01 returned the state OPENED with the reason OPEN\_CONFIRMED and a commandId. The same QR code scanned on LANE-BD-02 returned REJECTED with QR\_TOKEN\_REPLAY\_DETECTED. After we sent PASSAGE and LANE\_CLEAR for that commandId, \code{/api/demo/attendance-transactions} listed exactly one attendance record for EMP-001, linked to the first scan and its passage event, with the direction ENTRY.
+We also ran these steps by hand against a real \texttt{uvicorn} server in demo mode, with \code{TMC_GATE_DB} pointing to a SQLite file and the simulated controller. Figure 9.3 shows the run. We took a signed QR code for employee EMP-001 from the demo endpoint and used it twice: S-1 on LANE-BD-01 was OPENED (a), and S-2 with the same code on LANE-BD-02 was REJECTED with QR\_TOKEN\_REPLAY\_DETECTED (b). We then played the controller and sent PASSAGE and LANE\_CLEAR twice each for the commandId of S-1 (c). The HTTP answers alone do not show that the repeats were ignored, so in (d) we opened the database file with a separate connection. It holds one attendance record, linked to S-1 and passage event PE-1, one passage event, and exactly one OPEN and one CLOSE command. Table 9.7 in Section 9.7 sums up what each part of the run shows.
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\includegraphics[width=\linewidth]{figure/figure-9-3-flow-a-run.png}
+
+\vspace{6pt}
+\textbf{Figure 9.3. Flow A on Uvicorn with a SQLite File: Repeated Signals Give One Attendance Record}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.3}Flow A on Uvicorn with a SQLite File}
+\end{minipage}
+
+\vspace{10pt}
 
 \Needspace{9\baselineskip}
 \subsection*{9.6. Design Rules Checked by Tests}
@@ -334,13 +345,25 @@ Table 9.6 shows the result of \texttt{PYTHONPATH=src pytest} on the submitted ve
 \hline
 \code{test_submission_audit_regressions.py}, \code{test_pr15_followup_regressions.py}, \code{test_snapshot_cache_isolation.py} & Emergency priority, 15-second timeout worker, snapshot after restart, snapshot cache isolation & 18 & SQLite file through \code{create_app()} \\
 \hline
-\code{test_final_code_edges_regressions.py} & Reset owned by the current emergency, stored RESET never resent, one openGate per supportCaseId, snapshot read without type coercion & 19 & SQLite file through \code{create_app()} \\
-\hline
+\pagebreak
+\code{test_final_code_edges_regressions.py} & Reset owned by the current emergency, stored RESET never resent, one openGate per supportCaseId, snapshot read without type coercion & 19 & SQLite file through \code{create_app()} \\*
+\hline\noalign{\nobreak}
 \multicolumn{2}{|l|}{\textbf{Total} (commit 5bd6721, Python 3.12)} & \textbf{473} & 0 skipped, 1 expected failure \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.6}Test Results of the Submitted Version}
-The ``+1'' in the Package 5 row is the expected failure, and it is there on purpose: it is the adapter that treats a receipt as an opening, and the test shows that it breaks the turnstile contract (Section 9.4). CI on GitHub Actions runs the same suite on every push and pull request, and it was green on this commit.
+The ``+1'' in the Package 5 row is the expected failure, and it is there on purpose: it is the adapter that treats a receipt as an opening, and the test shows that it breaks the turnstile contract (Section 9.4). CI on GitHub Actions runs the same suite on every push and pull request, and it was green on this commit. Figure 9.4 is the output of the same suite, run again on the final report commit, where the code is unchanged from 5bd6721.
+
+\noindent\begin{minipage}{\linewidth}
+\centering
+\includegraphics[width=0.85\linewidth]{figure/figure-9-4-pytest-run.png}
+
+\vspace{6pt}
+\textbf{Figure 9.4. Output of the Test Suite: 473 Passed and 1 Expected Failure}
+\phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.4}Output of the Test Suite}
+\end{minipage}
+
+\vspace{10pt}
 
 The ten tests in \code{test_e2e_sqlite_flows.py} are the closest our automated tests get to a real run. Each one builds the whole application with \code{create_app()} on a real SQLite file, signs QR codes with Ed25519, talks to it over HTTP, and then opens the file with a separate connection to check what was really committed. For Flow A they show that:
 
@@ -355,7 +378,25 @@ The ten tests in \code{test_e2e_sqlite_flows.py} are the closest our automated t
 For Flow B they show that a request without a guard session gets HTTP 401, that an assisted opening stores the support case once and creates no attendance, and that an emergency hold makes new scans return LANE\_BUSY until the reset, after which LANE\_CLEAR closes the gate. One rule has no end-to-end test: a PASSAGE that arrives after the 15-second window. It is checked only at processor level (\code{test_pkg3_rules.py}) and for storage (\code{test_pkg4_sqlite_repos.py}).
 
 
-We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The manual run in Section 9.5 was done on a real Uvicorn server, but clicking through the Swagger page during the presentation is still a manual step.
+We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The manual run in Section 9.5 (Figure 9.3) was done on a real Uvicorn server with a SQLite file. Table 9.7 lists what each part of it shows and where the evidence is. The commands and the server log are kept in \code{report/evidence/}. Clicking through the Swagger page during the presentation is still a manual step.
+
+\begin{longtable}{|>{\raggedright\arraybackslash}p{22pt}|>{\raggedright\arraybackslash}p{130pt}|>{\raggedright\arraybackslash}p{140pt}|>{\raggedright\arraybackslash}p{106pt}|}
+\hline
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{22pt}|}{\textbf{Part}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{130pt}|}{\textbf{What we sent}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{140pt}|}{\textbf{What we observed}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{106pt}|}{\textbf{Rule shown}} \\
+\hline
+\endhead
+\multicolumn{4}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.7. Manual Run of Flow A on Uvicorn with a SQLite File}} \\
+\endlastfoot
+(a) & Scan S-1 with a fresh QR code on LANE-BD-01 & OPENED, OPEN\_CONFIRMED, and a commandId & Store before acting, then open (ADR-02) \\
+\hline
+(b) & Scan S-2 with the same code on LANE-BD-02 & REJECTED, QR\_TOKEN\_\allowbreak REPLAY\_\allowbreak DETECTED, no command & Single-use token claim (ADR-11) \\
+\hline
+(c) & PASSAGE PE-1 twice, then LANE\_CLEAR twice, for the commandId of S-1 & Each request answered with HTTP 200; this alone does not prove deduplication & -- \\*
+\hline\noalign{\nobreak}
+(d) & Read the database file with a separate connection & One attendance record (S-1, PE-1, EMP-001, ENTRY), one passage event, one OPEN and one CLOSE command & Repeated signals give one attendance and one closeGate (I-05, I-07) \\
+\hline
+\end{longtable}
+\phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.7}Manual Run of Flow A on Uvicorn with a SQLite File}
 
 \Needspace{9\baselineskip}
 \subsection*{9.8. What the Prototype Does Not Show}
@@ -363,6 +404,6 @@ We also ran the four demo scenarios of the README through FastAPI's TestClient o
 \phantomsection
 \addcontentsline{toc}{subsection}{9.8. What the Prototype Does Not Show}
 
-Passing tests do not close the open issues listed in Section 10.2. The simulated controller behaves the way I-01, I-03, and I-05 assume, so the tests show that Gate Core handles those signals correctly, but not that a real controller sends them. The tests check how the 2-second budget is shared out using a test clock; they do not measure the response time on factory hardware with a real kiosk and controller. SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested either.
+Passing tests do not close the open issues listed in Section 10.2. The simulated controller behaves the way I-01, I-03, and I-05 assume, so the tests show that Gate Core handles those signals correctly, but not that a real controller sends them. The tests check how the 2-second budget is shared out using a test clock; they do not measure the response time on factory hardware with a real kiosk and controller. There is also a gap in the budget itself. The prototype starts a 2,000 ms processing budget when processScan begins, because the HTTP route does not pass a kiosk deadline. This budget does not reserve the kiosk, network, and display time allocated in Table 5.4. Meeting NFR-01 requires budgeting those stages together and measuring from QR reading to result display. SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested either.
 
 Synchronization is only partly there. IFactoryUpdates applies snapshot changes and reads the local outbox, but without Site Sync or a central application we drive degraded mode by setting the age of the access data by hand. Finally, the guard session and the authorization checks are demo stubs, and the QR private key is created in the same process as the factory code, which the target design does not allow.

@@ -45,7 +45,7 @@ The comparison is qualitative. For each criterion a style gets Good, Fair, or We
 
 The first question is whether the whole system should be one deployment unit or several. A monolith is one unit. Calls stay inside one process, one database transaction can cover a scan and its audit record, and there is only one thing to deploy. A distributed system is made of several units that talk over the network, so it has to live with the fallacies of distributed computing: the network fails, latency is not zero, and the contracts between units need versions.
 
-That extra cost is only worth paying when different parts of the system need different characteristics. At TMC they do. A scan has to finish within 2 seconds beside the turnstile and keep working when the WAN link fails, while reports and the HR/Payroll handover can wait. Load is not the reason for splitting. The peak is about 1.3 completed entries and exits per second per factory, plus rejected and resubmitted scans, and one server handles that easily.
+That extra cost is only worth paying when different parts of the system need different characteristics. At TMC they do. A scan has to finish within 2 seconds beside the turnstile and keep working when the WAN link fails, while reports and the HR/Payroll handover can wait. Load is not the reason for splitting. The peak is about 1.3 completed entries and exits per second per factory, plus rejected and resubmitted scans. This load alone does not call for splitting the system to scale it out. Whether one factory server meets the 2-second limit still has to be measured with the real database and controller (Section 5.4).
 
 \Needspace{9\baselineskip}
 \subsubsection*{3.1.3. Styles Considered}

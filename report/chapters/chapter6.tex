@@ -27,7 +27,7 @@ ADR-02 & Persist the accepted scan before opening; distinguish command receipt, 
 \hline
 ADR-03 & Assign data ownership to individual modules and use public interfaces for communication between modules. \\
 \hline
-ADR-04 & Isolate controller and HR/Payroll integration through two ports and their corresponding adapters. \\
+ADR-04 & Isolate the turnstile controller and HR/Payroll behind ports owned by the business modules, each implemented by its own adapter. \\
 \hline
 ADR-05 & Transfer events persisted at the source, with duplicate-safe processing and tracking of application results. \\
 \hline
@@ -62,7 +62,7 @@ Each record below gives the characteristics involved, the context, the decision,
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item \textbf{Characteristics:} AC-01, AC-02, AC-03.
   \item \textbf{Context:} Both factories need a kiosk result within 2 seconds and must keep scanning when their WAN link fails, while consolidation, reporting, and handover can run minutes or hours later.
-  \item \textbf{Decision:} Each factory runs its own gate application and database, and the central site runs one application for access data, attendance, reports, and handover. Three event feeds carry gate records, access changes, and resolutions between them. Inside each application, the modules form a Modular Monolith.
+  \item \textbf{Decision:} Each factory runs its own factory application and database, and the central site runs one application for access data, attendance, reports, and handover. Three event feeds carry gate records, access changes, and resolutions between them. Inside each application, the modules form a Modular Monolith.
   \item \textbf{Reasons:} QR validation, durable recording, and the controller call stay on the factory LAN, so the WAN is not on the scan path and a fault at one factory does not stop the other. Microservices or a broker on the gate path would add network hops without any benefit at this load.
   \item \textbf{Consequences:} TMC has to run applications and databases at three sites and keep event contracts compatible across them.
   \item \textbf{Trade-off:} We give up the simplicity of one deployment and accept that central data lags behind the gates. Scanning during a WAN outage is limited by ADR-06.
@@ -233,7 +233,7 @@ ADR-02 & FR-02.2; FR-03.3--FR-03.6; NFR-01; NFR-02; NFR-03; I-01; I-03; I-05; I-
 \hline
 ADR-03 & FR-04.1--FR-04.4; FR-04.6--FR-04.7; NFR-03; NFR-04 & Module View and dependency rules in Section 4.1; data ownership in Section 4.2.1; central data persistence in Section 5.6.1. \\
 \hline
-ADR-04 & FR-02.2; FR-04.3; IC-01; IC-02; I-01--I-03; I-05 & The two ports in the Module View and C\&C View; contracts in Section 4.2.1; external-system connections in Section 5.3. \\
+ADR-04 & FR-02.2; FR-04.3; IC-01; IC-02; I-01--I-03; I-05 & The \guillemotleft port\guillemotright{} interfaces in the Module View (ITurnstileControl, IPayrollSubmission) and IPassageEvents in the C\&C View; contracts in Section 4.2.1; external-system connections in Section 5.3. \\
 \hline
 ADR-05 & FR-03.3--FR-03.6; FR-04.4--FR-04.5; NFR-02; NFR-03 & Channels in the C\&C View; duplicate prevention in Section 4.2.5; Event-driven Integration in Section 3.5; delivery and acknowledgement in Section 5.3. \\
 \hline
