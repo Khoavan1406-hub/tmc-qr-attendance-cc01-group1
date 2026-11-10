@@ -28,7 +28,7 @@ The same idea separates Access Decision from Turnstile Adapter. Access Decision 
 
 OCP is about adding behavior by adding code at a known extension point instead of editing the rules that already work. In TMC the clearest extension points are the two external integrations. A new controller that keeps the meaning of the turnstile ports (opening and closing results, passage and lane-clear events, emergency release and reset) only needs a new adapter, and the gate rules stay as they are. In the same way, an HR/Payroll format change that keeps the meaning of IPayrollSubmission only touches HR/Payroll Adapter. Work Schedule Policy plays a similar role for shift and aggregation rules: a change that fits its configuration model is made once, not separately in Attendance and Reporting, but a rule outside that model still needs new code and tests.
 
-We should be honest about how far this goes. Each application is a Modular Monolith, so even a new adapter is shipped as a new release of that application. What OCP gives us here is that an integration change does not spread into unrelated components.
+We should be honest about how far this goes. Each application is a Modular Monolith, so replacing an adapter may still need a new release of that application. What OCP gives us here is that an integration change does not spread into unrelated components.
 
 \subsubsection*{7.1.3. Liskov Substitution Principle (LSP)}
 
@@ -93,7 +93,7 @@ Functions are grouped by the responsibility they serve. Gate Core focuses on sca
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.2.2. Low Coupling}
 
-We keep coupling only where the flow really needs it. In the gate flow, the kiosk waits synchronously for just two things: the eligibility check and the opening confirmation. Passage recording and safe closure run after the kiosk has its answer. Gate Core stores source records and outgoing events at the factory, and Site Sync moves them later, so the kiosk never waits for central consolidation.
+We keep coupling only where the flow really needs it. In the gate flow, the kiosk waits synchronously for just two things: the eligibility check and the opening confirmation. Passage recording and safe closure run independently of the kiosk response and are outside its two-second budget. Gate Core stores source records and outgoing events at the factory, and Site Sync moves them later, so the kiosk never waits for central consolidation.
 
 Events reduce waiting, but they still couple the two sides through event structures, versions, progress, and acknowledgement rules. A contract change is therefore checked on both the producer and the consumer. In the same way, three deployed applications are not automatically three independent quanta, and Chapter 3 decides the quanta from the actual dependencies.
 
@@ -167,7 +167,7 @@ Two problems look similar here but need different handling. A duplicate request 
 
 Each token is tied to one factory, the one named in its signed content. A token issued for Binh Duong is rejected at Long An even if the employee may enter both sites, so the employee simply requests a new token there. The factory used in this check comes from server configuration and the authenticated, registered station, never from a factory field sent by the client. Because each factory only has to track its own tokens, no global token-claim service is needed on every scan.
 
-Single-use tokens stop reuse, but they have a limit. An employee can still share an unused image, and the token cannot prove who is holding the phone. Table 5.11 records this as a remaining risk.
+Single-use tokens stop reuse, but they have a limit. An employee can still share an unused image, and the token cannot prove who is holding the phone. Table 5.11 keeps live sharing (T6) as a remaining risk for this reason.
 
 \subsubsection*{7.3.4. Disconnected Operation and Recovery}
 
@@ -233,9 +233,9 @@ The actual event time is stored separately from the time the data was entered. O
 \phantomsection
 \addcontentsline{toc}{subsubsection}{7.5.2. Durable Audit and Business History}
 
-Audit evidence has to survive as long as the business data it describes, so it is committed together with the factory business change. Flow A defines the recording order and how write failures are handled. The evidence is durable from that commit, and central delivery comes later. Audit records reach Audit Log asynchronously. While a transfer is interrupted, the source keeps the evidence, and scans continue only while local durability and the operating conditions of Chapter 5 still hold.
+Audit evidence needs the same durability as the business change it describes, so both are committed together at the factory. Flow A defines the recording order and how write failures are handled. The evidence is durable from that commit, and central delivery comes later. Audit records reach Audit Log asynchronously. While a transfer is interrupted, the source keeps the evidence, and scans continue only while local durability and the operating conditions of Chapter 5 still hold.
 
-Resending must not create duplicates. A resent event keeps its identifier, so the consumer does not create a second audit record. We also treat a broker acknowledgement only as proof of delivery, not as proof that the business change was applied. For attendance adjustments, the history keeps the original data, the approved decision, and the application result. Reconciliation adds to this history and leaves the original evidence untouched, and the trail shows clearly whether an approved case has actually been applied.
+Resending must not create duplicates. A resent event keeps its identifier, so the consumer does not create a second audit record. A broker acknowledgement only shows that the broker has the message. It does not prove that the business change was applied. For attendance adjustments, the history keeps the original data, the approved decision, and the application result. Reconciliation adds to this history and leaves the original evidence untouched, and the trail shows clearly whether an approved case has actually been applied.
 
 \Needspace{9\baselineskip}
 \subsubsection*{7.5.3. Audit Access and Integrity}
