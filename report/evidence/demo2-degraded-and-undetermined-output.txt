@@ -1,32 +1,32 @@
 # Server: PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000 (demo mode, simulated controller)
 (a) access data 300 s old -> DEGRADED, the scan is still accepted but flagged
 $ curl -X POST /api/demo/watermark-age -d '{"watermarkAgeSeconds":300}'
-{"watermarkAgeSeconds":300.0,"clockErrorBoundSec":0.5,"confirmedWatermark":"2026-11-10T13:16:56.096009+00:00","operatingMode":"DEGRADED"}
+{"watermarkAgeSeconds": 300.0, "clockErrorBoundSec": 0.5, "confirmedWatermark": "2026-11-10T13:43:11.850844+00:00", "operatingMode": "DEGRADED"}
 
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-10","qrToken":"$QR_EMP001","laneId":"LANE-BD-01"}'
-{"scanId":"S-10","state":"OPENED","laneId":"LANE-BD-01","degradedFlag":true,"reason":"OPEN_CONFIRMED","commandId":"cmd-f9c8a16da200"}
+{"scanId": "S-10", "state": "OPENED", "laneId": "LANE-BD-01", "degradedFlag": true, "reason": "OPEN_CONFIRMED", "commandId": "cmd-89769ae7333e"}
 
 # (PASSAGE PE-10 and LANE_CLEAR sent for S-10, so LANE-BD-01 is free again)
 
 (b) access data 1800 s old -> CANNOT_PROCESS, no automatic scan
 $ curl -X POST /api/demo/watermark-age -d '{"watermarkAgeSeconds":1800}'
-{"watermarkAgeSeconds":1800.0,"clockErrorBoundSec":0.5,"confirmedWatermark":"2026-11-10T12:51:56.182033+00:00","operatingMode":"CANNOT_PROCESS"}
+{"watermarkAgeSeconds": 1800.0, "clockErrorBoundSec": 0.5, "confirmedWatermark": "2026-11-10T13:18:11.971701+00:00", "operatingMode": "CANNOT_PROCESS"}
 
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-11","qrToken":"$QR_EMP002","laneId":"LANE-BD-01"}'
-{"scanId":"S-11","state":"CANNOT_PROCESS","laneId":"LANE-BD-01","degradedFlag":false,"reason":"ELIGIBILITY_DATA_UNUSABLE_OR_EXPIRED","commandId":null}
+{"scanId": "S-11", "state": "CANNOT_PROCESS", "laneId": "LANE-BD-01", "degradedFlag": false, "reason": "ELIGIBILITY_DATA_UNUSABLE_OR_EXPIRED", "commandId": null}
 
 (c) data fresh again, but the controller reply times out and a status query cannot tell
 $ curl -X POST /api/demo/watermark-age -d '{"watermarkAgeSeconds":0}'
-{"watermarkAgeSeconds":0.0,"clockErrorBoundSec":0.5,"confirmedWatermark":"2026-11-10T13:21:56.226086+00:00","operatingMode":"NORMAL"}
+{"watermarkAgeSeconds": 0.0, "clockErrorBoundSec": 0.5, "confirmedWatermark": "2026-11-10T13:48:12.049171+00:00", "operatingMode": "NORMAL"}
 
 $ curl -X POST /api/demo/controller-mode -d '{"openMode":"TIMEOUT","queryStatus":"UNDETERMINED"}'
-{"openMode":"TIMEOUT","closeMode":"CLOSED","emergencyMode":"EMERGENCY_RELEASED","resetMode":"RESET_CONFIRMED","queryStatus":"UNDETERMINED","latencyMs":0}
+{"openMode": "TIMEOUT", "closeMode": "CLOSED", "emergencyMode": "EMERGENCY_RELEASED", "resetMode": "RESET_CONFIRMED", "queryStatus": "UNDETERMINED", "latencyMs": 0}
 
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-12","qrToken":"$QR_EMP002_new","laneId":"LANE-BD-02"}'
-{"scanId":"S-12","state":"PENDING_RECONCILIATION","laneId":"LANE-BD-02","degradedFlag":false,"reason":"CONTROLLER_OUTCOME_UNDETERMINED","commandId":"cmd-18411b0a25a6"}
+{"scanId": "S-12", "state": "PENDING_RECONCILIATION", "laneId": "LANE-BD-02", "degradedFlag": false, "reason": "CONTROLLER_OUTCOME_UNDETERMINED", "commandId": "cmd-3a3869ef7ef2"}
 
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-13","qrToken":"$QR_EMP001_new","laneId":"LANE-BD-02"}'
-{"scanId":"S-13","state":"LANE_BUSY","laneId":"LANE-BD-02","degradedFlag":false,"reason":"LANE_HAS_ACTIVE_OR_UNRESOLVED_CYCLE","commandId":null}
+{"scanId": "S-13", "state": "LANE_BUSY", "laneId": "LANE-BD-02", "degradedFlag": false, "reason": "LANE_HAS_ACTIVE_OR_UNRESOLVED_CYCLE", "commandId": null}
 
 (d) separate sqlite3 connection to factory.sqlite3
 sqlite> SELECT scan_id, state, degraded_flag, reason FROM scan_attempts ORDER BY scan_id;

@@ -6,7 +6,7 @@ echo "(a) access data 300 s old -> DEGRADED, the scan is still accepted but flag
 show /api/demo/watermark-age '{"watermarkAgeSeconds":300}' '{"watermarkAgeSeconds":300}'
 Q=$(qr EMP-001)
 R=$(curl -s -X POST $B/api/gate/scans -H 'content-type: application/json' -d "{\"scanId\":\"S-10\",\"qrToken\":\"$Q\",\"laneId\":\"LANE-BD-01\"}")
-echo "\$ curl -X POST /api/gate/scans -d '{\"scanId\":\"S-10\",\"qrToken\":\"\$QR_EMP001\",\"laneId\":\"LANE-BD-01\"}'"; echo "$R"; echo
+echo "\$ curl -X POST /api/gate/scans -d '{\"scanId\":\"S-10\",\"qrToken\":\"\$QR_EMP001\",\"laneId\":\"LANE-BD-01\"}'"; echo "$R" | fmt_json; echo
 C=$(echo "$R" | python3 -c 'import sys,json;print(json.load(sys.stdin)["commandId"])')
 curl -s -o /dev/null -X POST $B/api/controller/signals/passage -H 'content-type: application/json' -d "{\"passageEventId\":\"PE-10\",\"commandId\":\"$C\",\"laneId\":\"LANE-BD-01\"}"
 curl -s -o /dev/null -X POST $B/api/controller/signals/lane-clear -H 'content-type: application/json' -d "{\"commandId\":\"$C\",\"laneId\":\"LANE-BD-01\"}"

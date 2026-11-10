@@ -122,7 +122,7 @@ The folders follow the Entry, Business, and Persistence layers of Gate Core in F
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.3}Folders of the Task 2 Code}
 
-Figure 9.1 puts the same folders together with the parts outside the code. The three callers on the left reach only the \code{api/} layer. Inside, every arrow points down or towards \code{ports/}: the routes call the application layer through the interfaces in \code{ports/}, and the adapters implement those interfaces instead of being called by name. GateTransactionProcessor is the one class that sits on both sides of a port, because it implements IPassageEvents for the signal routes and uses the command ports to drive the controller. The SQLite file and the simulated controller are only reached through \code{adapters/}, so swapping either of them does not touch the business code.
+Figure 9.1 puts the same folders together with the parts outside the code. Everything inside \code{src/tmc_gate} runs in one Python process, including the simulated controller. That controller is ControllerApiClient in \code{adapters/turnstile_adapter.py}: it answers openGate, closeGate, the emergency commands, and status queries, but it never sends PASSAGE or LANE\_CLEAR by itself. In the demo runs these two signals are sent to the signal routes by the demo script or from Swagger UI, and in the tests by the test code, each time playing the controller. The four callers at the top reach only the \code{api/} routers. The kiosk scan routes hold IScanSubmission and the signal routes hold IPassageEvents. The guard router holds GateInterventionFacade, the public class of M3, together with IGuardIdentityApi for the session check. The demo router is wired with the demo QR issuer, the snapshot and attendance repositories, and ControllerApiClient, and it only exists in demo mode. In the application layer, GateCoreFacade and GateTransactionProcessor both implement ports and use other ports: the facade implements the three inbound ports and uses the repository ports, and the processor implements IPassageEvents and uses the command, repository, and cross-cutting ports. The SQLite file is only touched by \code{sqlite_repos}.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
@@ -213,7 +213,7 @@ A file database runs in write-ahead logging mode, and the unit of work wraps eac
 \phantomsection
 \addcontentsline{toc}{subsubsection}{9.3.4. HTTP Endpoints}
 
-Figure 9.3 is a screenshot of the Swagger page of the running prototype. The endpoints are grouped by who calls them. The kiosk uses the two scan endpoints, which only reach IScanSubmission. The simulated controller reports PASSAGE and LANE\_CLEAR through the two signal endpoints, which reach IPassageEvents. Guards use the three intervention endpoints and must send an \texttt{X-Guard-Session} header, because the guard is taken from the session and not from the request body. The four demo endpoints issue QR codes, change the age of the access data, choose how the simulated controller answers, and list the stored attendance. They are only mounted when \code{demo_mode} is on.
+Figure 9.3 is a screenshot of the Swagger page of the running prototype. The endpoints are grouped by who calls them. The kiosk uses the two scan endpoints, which only reach IScanSubmission. The two signal endpoints take PASSAGE and LANE\_CLEAR and reach IPassageEvents; in the prototype they are called by the demo script, Swagger UI, or the tests in place of a real controller. Guards use the three intervention endpoints and must send an \texttt{X-Guard-Session} header, because the guard is taken from the session and not from the request body. The four demo endpoints issue QR codes, change the age of the access data, choose how the simulated controller answers, and list the stored attendance. They are only mounted when \code{demo_mode} is on.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
@@ -226,33 +226,33 @@ Figure 9.3 is a screenshot of the Swagger page of the running prototype. The end
 
 \vspace{10pt}
 
-Table 9.5 lists the same endpoints with the port each one reaches. A route only holds the interface named in the third column, so the kiosk routes cannot start an intervention and the guard routes cannot submit a scan.
+Table 9.5 lists the same endpoints with what each router is given in \code{app.py}. The kiosk and signal routes only get a port, so they cannot start an intervention. The guard routes get GateInterventionFacade and, for the session check, IGuardIdentityApi; they have no way to submit a scan. The demo routes are wired directly to demo helpers, which is acceptable only because they are not mounted outside demo mode.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
 \begin{tabular}{|>{\raggedright\arraybackslash}p{167pt}|>{\raggedright\arraybackslash}p{56pt}|>{\raggedright\arraybackslash}p{88pt}|>{\raggedright\arraybackslash}p{84pt}|}
 \hline
-\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{167pt}|}{\textbf{Method and path}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{56pt}|}{\textbf{Caller}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{88pt}|}{\textbf{Reaches}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{84pt}|}{\textbf{Result}} \\
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{167pt}|}{\textbf{Method and path}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{56pt}|}{\textbf{Caller}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{88pt}|}{\textbf{Router is given}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{84pt}|}{\textbf{Result}} \\
 \hline
 \code{POST /api/gate/scans} & Kiosk & IScanSubmission & Scan state, reason, commandId (A1--A7) \\
 \hline
 \code{GET /api/gate/scans/{scanId}} & Kiosk & IScanSubmission & Stored state after a lost response; 404 if unknown \\
 \hline
-\code{POST /api/controller/signals/passage} & Controller & IPassageEvents & PASSAGE handled (A8) \\
+\code{POST /api/controller/signals/passage} & Controller (played) & IPassageEvents & PASSAGE handled (A8) \\
 \hline
-\code{POST /api/controller/signals/lane-clear} & Controller & IPassageEvents & LANE\_CLEAR handled, closeGate (A9) \\
+\code{POST /api/controller/signals/lane-clear} & Controller (played) & IPassageEvents & LANE\_CLEAR handled, closeGate (A9) \\
 \hline
-\code{POST /api/interventions/assisted-open} & Guard & GateIntervention\-Api & Support case and assisted openGate; 401 without a session \\
+\code{POST /api/interventions/assisted-open} & Guard & GateIntervention\-Facade & Support case and assisted openGate; 401 without a session \\
 \hline
-\code{POST /api/interventions/emergency-release} & Guard & GateIntervention\-Api & EMERGENCY\_\allowbreak HOLD on the lane \\
+\code{POST /api/interventions/emergency-release} & Guard & GateIntervention\-Facade & EMERGENCY\_\allowbreak HOLD on the lane \\
 \hline
-\code{POST /api/interventions/emergency-reset} & Guard & GateIntervention\-Api & Reset of the emergency that holds the lane \\
+\code{POST /api/interventions/emergency-reset} & Guard & GateIntervention\-Facade & Reset of the emergency that holds the lane \\
 \hline
 \code{POST /api/demo/qr-tokens} & Demo only & QR issuer helper & Signed 60-second token \\
 \hline
 \code{POST /api/demo/watermark-age} & Demo only & Snapshot storage & Operating mode after ageing the watermark \\
 \hline
-\code{POST /api/demo/controller-mode} & Demo only & Simulated controller & How the next commands and queries are answered \\
+\code{POST /api/demo/controller-mode} & Demo only & ControllerApi\-Client & How the next commands and queries are answered \\
 \hline
 \code{GET /api/demo/attendance-transactions} & Demo only & Attendance storage & Stored attendance records \\
 \hline
@@ -291,11 +291,23 @@ Only one port was added after that point. While checking the code before submiss
 \phantomsection
 \addcontentsline{toc}{subsection}{9.5. Following One Scan Through the Code}
 
-The tables above show what exists, but not in which order things happen. In this section we follow one QR scan from the kiosk request to the closed gate. Each step carries the label of the matching step in the design sequence of Figure 4.16 and Section 4.2.2, so the two descriptions can be read side by side. The classes are the ones in Figures 4.18 and 4.19, and Figure 9.4 draws the same steps as a sequence diagram with the names used in the code.
+The tables above show what exists, but not in which order things happen. In this section we follow one QR scan from the kiosk request to the closed gate. Each step carries the label of the matching step in the design sequence of Figure 4.16 and Section 4.2.2, so the two descriptions can be read side by side. The classes are the ones in Figures 4.18 and 4.19, and Figure 9.4 draws the same steps as two sequence diagrams with the names used in the code. Part (a) is the kiosk request, A1 to A7. Part (b) shows A8 and A9, which arrive as their own HTTP requests. Both parts show one successful run as an example. The order in which they are drawn is not an order the code guarantees: the PASSAGE request can be handled before the kiosk has received its A7 response, and LANE\_CLEAR does not wait for PASSAGE.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\includegraphics[width=1.0\linewidth]{diagram/implementation/figure-9-4-flow-a-sequence.png}
+\includegraphics[width=0.94\linewidth]{diagram/implementation/figure-9-4a-scan-request.png}
+
+\vspace{2pt}
+{\small (a) Kiosk request, A1--A7}
+\end{minipage}
+
+\vspace{8pt}
+\noindent\begin{minipage}{\linewidth}
+\centering
+\includegraphics[width=0.86\linewidth]{diagram/implementation/figure-9-4b-controller-signals.png}
+
+\vspace{2pt}
+{\small (b) Controller signals, A8 and A9: separate requests, in any order relative to (a) and to each other}
 
 \vspace{6pt}
 \textbf{Figure 9.4. Flow A as Implemented: One Scan from the Kiosk Request to the Closed Gate}
@@ -333,7 +345,7 @@ The run in Figure 9.5 only covers the normal path. We ran two more scripts on a 
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\includegraphics[width=0.92\linewidth]{figure/figure-9-6-degraded-undetermined-run.png}
+\includegraphics[width=\linewidth]{figure/figure-9-6-degraded-undetermined-run.png}
 
 \vspace{6pt}
 \textbf{Figure 9.6. Degraded Mode, CANNOT\_PROCESS, and an Uncertain Opening on Uvicorn}
@@ -342,14 +354,14 @@ The run in Figure 9.5 only covers the normal path. We ran two more scripts on a 
 
 \vspace{10pt}
 
-Figure 9.7 runs the local part of Flow B. An assisted opening without a guard session gets HTTP 401 (a). With the session, the same request sent twice returns the same commandId, so the gate is opened once for one support case (b). An emergency release puts LANE-BD-01 in EMERGENCY\_HOLD, and a QR scan on that lane gets LANE\_BUSY (c). After the reset and a LANE\_CLEAR the gate is closed and the next scan is OPENED again (d). The database holds the two support cases, one command of each kind, and no attendance record, because assisted access waits for HR approval (e).
+Figure 9.7 runs the local part of Flow B. An assisted opening without a guard session gets HTTP 401 (a). With the session, the same request sent twice returns the same commandId both times (b). We then played the controller for this assisted opening and sent a PASSAGE right away, well inside the 15-second window, followed by LANE\_CLEAR (c). For a QR scan the same two signals created an attendance record in Figure 9.5. An emergency release puts LANE-BD-01 in EMERGENCY\_HOLD, and a QR scan on that lane gets LANE\_BUSY (d). After the reset and a LANE\_CLEAR the gate is closed and the next scan is OPENED again (e). In the database (f), case-001 has one stored OPEN command and one CLOSE command, the passage PE-30 is stored without a review reason, and there is still no attendance record. So a timely passage through an assisted opening did not create attendance by itself. The run does not show the later HR approval step, which is outside the prototype.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\includegraphics[width=0.92\linewidth]{figure/figure-9-7-flow-b-run.png}
+\includegraphics[width=\linewidth]{figure/figure-9-7-flow-b-run.png}
 
 \vspace{6pt}
-\textbf{Figure 9.7. Flow B on Uvicorn: Guard Session, Assisted Opening, and Emergency Hold}
+\textbf{Figure 9.7. Flow B on Uvicorn: Guard Session, Assisted Opening with a Passage, and Emergency Hold}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.7}Flow B on Uvicorn}
 \end{minipage}
 
@@ -487,18 +499,22 @@ We also ran the four demo scenarios of the README through FastAPI's TestClient o
 \hline
 9.6 (b) & Watermark age 1800 s, then scan S-11 & CANNOT\_PROCESS, no command & No automatic scan from 30 minutes (I-10) \\
 \hline
-9.6 (c), (d) & openGate times out, status query undetermined; scan S-12, then S-13 on the same lane & S-12 PENDING\_RECONCILIATION with one OPEN command stored as UNDETERMINED; S-13 LANE\_BUSY & Uncertain opening is not resent and keeps the lane held (I-03) \\
+9.6 (c), (d) & openGate times out, status query undetermined; scan S-12, then S-13 on the same lane & S-12 PENDING\_RECONCILIATION with one stored OPEN command, outcome UNDETERMINED; S-13 LANE\_BUSY & Uncertain opening stays pending and keeps the lane held (I-03) \\
 \hline
 9.7 (a) & Assisted opening without X-Guard-Session & HTTP 401 & Guard comes from the session \\
 \hline
-9.7 (b) & The same assisted opening twice with a session & Same commandId both times; one OPEN command for case-001 & One opening per support case \\
+9.7 (b) & The same assisted opening twice with a session & Same commandId both times; one stored OPEN command for case-001 & A repeated request reuses the stored command \\
 \hline
-9.7 (c), (d) & Emergency release, scan, reset, LANE\_CLEAR, scan & EMERGENCY\_HOLD, LANE\_BUSY, RESET\_CONFIRMED, CLOSED, then OPENED & Emergency hold blocks scans until reset and close \\
+9.7 (c) & PASSAGE PE-30 at once, then LANE\_CLEAR, for the assisted commandId & HTTP 200 for both; CLOSE command stored for case-001 & -- \\
 \hline
-9.7 (e) & Read the database file & Two support cases, no attendance record & Assisted access creates no attendance \\
+9.7 (d), (e) & Emergency release, scan, reset, LANE\_CLEAR, scan & EMERGENCY\_HOLD, LANE\_BUSY, RESET\_CONFIRMED, CLOSED, then OPENED & Emergency hold blocks scans until reset and close \\
+\hline
+9.7 (f) & Read the database file & Two support cases; PE-30 stored with no review reason; no attendance record & A timely passage after an assisted opening creates no attendance by itself \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.8}Manual Runs on Uvicorn with a SQLite File}
+
+Table 9.8 only states what can be seen in the HTTP answers and in the database file. A stored command row does not prove how often the adapter was called, and the demo server does not print the command log of the simulated controller. The rule that an uncertain OPEN is not sent again, and that a repeated assisted request does not reach the controller a second time, is therefore checked by tests that count the commands the simulated controller received. In \code{test_e2e_sqlite_flows.py} these are \code{test_flow_a_undetermined_open_is_queried_once_and_never_resent} and \code{test_flow_b_assisted_open_records_case_without_attendance}, and the third is \code{test_resending_identical_support_case_is_idempotent} in \code{test_pkg6_pr8_regressions.py}.
 
 \Needspace{9\baselineskip}
 \subsection*{9.8. What the Prototype Does Not Show}
@@ -506,6 +522,6 @@ We also ran the four demo scenarios of the README through FastAPI's TestClient o
 \phantomsection
 \addcontentsline{toc}{subsection}{9.8. What the Prototype Does Not Show}
 
-Passing tests do not close the open issues listed in Section 10.2. The simulated controller behaves the way I-01, I-03, and I-05 assume, so the tests show that Gate Core handles those signals correctly, but not that a real controller sends them. The tests check how the 2-second budget is shared out using a test clock; they do not measure the response time on factory hardware with a real kiosk and controller. There is also a gap in the budget itself. The prototype starts a 2,000 ms processing budget when processScan begins, because the HTTP route does not pass a kiosk deadline. This budget does not reserve the kiosk, network, and display time allocated in Table 5.4. Meeting NFR-01 requires budgeting those stages together and measuring from QR reading to result display. SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested either.
+Passing tests do not close the open issues listed in Section 10.2. The simulated controller answers commands the way I-01 and I-03 assume, and the PASSAGE and LANE\_CLEAR signals of I-05 are sent by the tests and scripts, so the runs show that Gate Core handles those signals correctly, but not that a real controller sends them. The tests check how the 2-second budget is shared out using a test clock; they do not measure the response time on factory hardware with a real kiosk and controller. There is also a gap in the budget itself. The prototype starts a 2,000 ms processing budget when processScan begins, because the HTTP route does not pass a kiosk deadline. This budget does not reserve the kiosk, network, and display time allocated in Table 5.4. Meeting NFR-01 requires budgeting those stages together and measuring from QR reading to result display. SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested either.
 
 Synchronization is only partly there. IFactoryUpdates applies snapshot changes and reads the local outbox, but without Site Sync or a central application we drive degraded mode by setting the age of the access data by hand. Finally, the guard session and the authorization checks are demo stubs, and the QR private key is created in the same process as the factory code, which the target design does not allow.

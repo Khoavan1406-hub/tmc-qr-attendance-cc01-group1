@@ -1,0 +1,32 @@
+@startuml
+!include style.iuml
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 6
+skinparam BoxPadding 2
+skinparam defaultFontSize 13
+skinparam noteFontSize 12
+hide footbox
+
+participant "Demo script or\nSwagger, playing\nthe controller" as C
+participant "gate_controller\nsignal routes" as R
+participant "GateTransaction\nProcessor" as P
+participant "SQLite\nrepositories" as DB
+participant "SimulatedTurnstile\nAdapter" as T
+
+group A8 PASSAGE: its own HTTP request; may arrive before or after A7
+C -> R : POST /api/controller/\nsignals/passage
+R -> P : onPassage()\n[IPassageEvents]
+P -> DB : PassageEvent, and\nAttendanceTransaction only if\nthe scan is still OPENED\nand the 15 s window is open
+R --> C : HTTP 200
+end
+group A9 LANE_CLEAR: its own HTTP request; does not wait for A8
+C -> R : POST /api/controller/\nsignals/lane-clear
+R -> P : onLaneClear()\n[IPassageEvents]
+P -> DB : CLOSE_SENT +\ncloseCommandId
+P -> T : closeGate(closeCommandId)
+T --> P : CLOSED
+P -> DB : CLOSED,\nrelease lane
+R --> C : HTTP 200
+end
+@enduml

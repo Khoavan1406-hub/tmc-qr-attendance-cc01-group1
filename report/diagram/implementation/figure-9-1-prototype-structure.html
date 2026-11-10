@@ -1,65 +1,67 @@
 <html><head><style>
 body{margin:0;background:#fff;font-family:'DejaVu Sans',sans-serif;color:#111}
-#w{position:relative;width:1180px;padding:16px}
-.outer{position:absolute;left:250px;top:16px;width:690px;border:1.6px solid #111;padding:8px 12px 12px}
-.ttl{font-weight:bold;font-size:15px;margin-bottom:6px}.sub{font-weight:normal;font-style:italic;font-size:12px}
-.layer{border:1.2px dashed #555;padding:6px 8px 8px;margin-top:10px}
-.lt{font-weight:bold;font-size:13px;margin-bottom:5px}
-.row{display:flex;gap:8px;flex-wrap:wrap}
-.b{border:1.2px solid #111;background:#f2f2f2;padding:5px 7px;font-size:12.5px;flex:1}
-.b b{font-size:13px}.b i{color:#444;font-size:11.5px}
-.ext{position:absolute;border:1.2px solid #111;background:#fff;padding:6px 8px;font-size:12.5px;width:190px}
-.ext i{color:#444;font-size:11.5px}
-svg{position:absolute;left:0;top:0;overflow:visible}
-.leg{position:absolute;font-size:12px;border:1px solid #888;padding:6px 8px;background:#fff}
+#w{position:relative;width:820px;padding:12px}
+.callers{display:flex;gap:7px;margin:0 22px 34px 22px}
+.ext{border:1.3px solid #111;background:#fff;padding:5px 8px;font-size:14px;flex:1}
+.ext i{color:#333;font-size:13px}
+.outer{border:1.6px solid #111;padding:10px 10px 8px}
+.ttl{font-weight:bold;font-size:15px}.sub{font-weight:normal;font-style:italic;font-size:13px}
+.layer{border:1.2px dashed #555;padding:5px 7px 7px;margin-top:9px}
+.lt{font-weight:bold;font-size:14px;margin-bottom:4px}
+.row{display:flex;gap:7px}
+.b{border:1.2px solid #111;background:#f0f0f0;padding:4px 6px;font-size:13.5px;flex:1;line-height:1.3}
+.b b{font-size:14px}.b i{color:#333;font-size:12.5px}
+.below{display:flex;gap:10px;margin-top:30px}
+.leg{font-size:13px;border:1px solid #888;padding:5px 8px;flex:1.4;line-height:1.35}
+svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
 </style></head><body><div id=w>
-<div class=outer id=outer>
- <div class=ttl>src/tmc_gate <span class=sub>factory application prototype: M1 Gate Core + M3 Gate Intervention</span></div>
- <div class=layer id=api><div class=lt>api/ <span class=sub>entry layer: translates HTTP only</span></div><div class=row>
-  <div class=b id=gc><b>gate_controller</b><br>scan routes (IScanSubmission)<br>signal routes (IPassageEvents)</div>
-  <div class=b id=ic><b>intervention_controller</b><br>guard routes (GateInterventionApi)<br><i>guard taken from X-Guard-Session</i></div>
-  <div class=b><b>demo_controller</b><br>QR, watermark age, controller mode<br><i>mounted only in demo_mode</i></div>
-  <div class=b><b>app.py</b><br>composition root<br><i>creates and wires all objects</i></div></div></div>
- <div class=layer id=app><div class=lt>application/ <span class=sub>business layer: imports only ports/ and domain/</span></div><div class=row>
-  <div class=b><b>GateCoreFacade</b><br><i>implements IScanSubmission, IInterventionRequest, IFactoryUpdates</i></div>
-  <div class=b id=gtp><b>GateTransactionProcessor</b><br><i>Flow A cycle; implements IPassageEvents</i></div>
-  <div class=b><b>AccessDecision</b><br><i>signature, expiry, factory, snapshot rights</i></div>
-  <div class=b><b>GateInterventionFacade, InterventionService</b><br><i>Flow B; calls IInterventionRequest</i></div></div></div>
- <div class=layer id=ports><div class=lt>ports/ <span class=sub>interfaces owned by Gate Core: imports only domain/</span></div><div class=row>
-  <div class=b><b>inbound.py</b><br>IScanSubmission, IInterventionRequest, IFactoryUpdates</div>
-  <div class=b><b>turnstile.py</b><br>IOpenGate, ICloseGate, IEmergencyGate, IPassageEvents, IControllerStatusQuery</div>
-  <div class=b style="flex:1.6"><b>repositories.py</b><br>IUnitOfWork, IScanRepository, IAttendanceRepository, IOutboxRepository, ISnapshotRepository, IPassageWindowQuery; IAuditApi, IHealthApi, IAuthorizationApi, IGuardIdentityApi</div></div></div>
- <div class=layer id=adp><div class=lt>adapters/ <span class=sub>implement the ports: may use sqlite3 and cryptography</span></div><div class=row>
-  <div class=b id=sq><b>sqlite_repos</b><br>SqliteUnitOfWork, SqliteScan-, Attendance-, Outbox-, SnapshotRepository</div>
-  <div class=b id=ta><b>turnstile_adapter</b><br>SimulatedTurnstileAdapter, FaultyTurnstileAdapter, ControllerApiClient</div>
-  <div class=b><b>PassageTimeoutWorker</b><br><i>every 0.25 s calls sweepPassageTimeouts</i></div>
-  <div class=b><b>demo helpers and stubs</b><br>QrCredentialIssuance, DemoGuardSessionStub, in-memory audit, health, authorization</div></div></div>
- <div class=layer id=dom><div class=lt>domain/ <span class=sub>imports nothing outside domain/</span></div><div class=row>
-  <div class=b>models.py: Lane, ScanAttempt, TokenReservation, GateCycle, GateCommand, PassageEvent, AttendanceTransaction, SupportCase</div>
-  <div class=b>enums.py: scan, cycle, and command states</div>
-  <div class=b>snapshot.py: EligibilitySnapshot (60 s / 30 min limits)</div></div></div>
+<div class=callers>
+ <div class=ext id=kiosk><b>Kiosk</b><br><i>played by Swagger UI or the tests</i></div>
+ <div class=ext id=sig><b>PASSAGE and LANE_CLEAR</b><br><i>sent by the demo script, Swagger UI or the tests in place of the controller</i></div>
+ <div class=ext id=guard><b>Guard</b><br><i>demo session in X-Guard-Session</i></div>
+ <div class=ext id=demo><b>Demo operator</b><br><i>Swagger UI or demo script</i></div>
 </div>
-<div class=ext id=kiosk style="left:16px;top:70px"><b>Kiosk</b><br><i>played by Swagger UI or the tests</i></div>
-<div class=ext id=ctrl style="left:16px;top:160px"><b>Turnstile controller</b><br><i>simulated; sends PASSAGE and LANE_CLEAR</i></div>
-<div class=ext id=guard style="left:16px;top:250px"><b>Guard</b><br><i>demo session token</i></div>
-<div class=ext id=db style="left:980px;top:470px;border-radius:14px"><b>factory.sqlite3</b><br><i>file chosen with TMC_GATE_DB</i></div>
-<div class=ext id=ctrl2 style="left:980px;top:560px"><b>Simulated controller</b><br><i>answers openGate, closeGate, emergency commands and status queries</i></div>
-<div class=leg style="left:980px;top:70px;width:180px">→ call or request<br>⇢ depends on (import)<br>Layer rules are checked by<br><i>test_architecture_solid.py</i></div>
-<svg id=s width=1200 height=900><defs><marker id=a markerWidth=10 markerHeight=8 refX=9 refY=4 orient=auto><path d="M0,0 L10,4 L0,8 z" fill="#111"/></marker>
-<marker id=o markerWidth=10 markerHeight=8 refX=9 refY=4 orient=auto><path d="M0,0 L10,4 L0,8" fill="none" stroke="#111"/></marker></defs></svg>
+<div class=outer id=outer>
+ <div class=layer style="margin-top:0"><div class=row>
+  <div class=b id=gc1><b>gate_controller</b><br>scan routes<br><i>hold IScanSubmission (GateCoreFacade)</i></div>
+  <div class=b id=gc2><b>gate_controller</b><br>signal routes<br><i>hold IPassageEvents (the processor)</i></div>
+  <div class=b id=ic><b>intervention_controller</b><br><i>holds GateInterventionFacade and IGuardIdentityApi</i></div>
+  <div class=b id=dc><b>demo_controller</b><br><i>holds the QR issuer, snapshot and attendance repositories, ControllerApiClient</i></div>
+ </div><div class=lt style="margin:5px 0 0">api/ <span class=sub>routers translate HTTP; app.py is the composition root</span></div></div>
+ <div class=layer><div class=lt>application/ <span class=sub>imports only ports/ and domain/</span></div><div class=row>
+  <div class=b><b>GateCoreFacade</b><br><i>implements IScanSubmission, IInterventionRequest, IFactoryUpdates; uses the processor and repository ports</i></div>
+  <div class=b><b>GateTransactionProcessor</b><br><i>Flow A; implements IPassageEvents; uses the command, repository and cross-cutting ports</i></div>
+  <div class=b><b>AccessDecision</b><br><i>signature, expiry, factory, snapshot rights</i></div>
+  <div class=b><b>GateInterventionFacade, InterventionService</b><br><i>Flow B; implement GateInterventionApi; use IInterventionRequest</i></div>
+ </div></div>
+ <div class=layer><div class=lt>ports/ <span class=sub>interfaces: imports only domain/</span></div><div class=row>
+  <div class=b><b>inbound.py</b><br>IScanSubmission, IInterventionRequest, IFactoryUpdates, GateInterventionApi</div>
+  <div class=b><b>turnstile.py</b><br>IOpenGate, ICloseGate, IEmergencyGate, IControllerStatusQuery, IPassageEvents</div>
+  <div class=b style="flex:1.5"><b>repositories.py</b><br>IUnitOfWork, scan, attendance, outbox and snapshot repositories, IPassageWindowQuery; IAuditApi, IHealthApi, IAuthorizationApi, IGuardIdentityApi</div>
+ </div></div>
+ <div class=layer><div class=lt>adapters/ <span class=sub>implement the ports; may use sqlite3 and cryptography</span></div><div class=row>
+  <div class=b id=sq><b>sqlite_repos</b><br>SqliteUnitOfWork and the Sqlite repositories</div>
+  <div class=b id=ta style="flex:1.5"><b>turnstile_adapter</b><br>SimulatedTurnstileAdapter, FaultyTurnstileAdapter<br><b>ControllerApiClient</b> <i>= the simulated controller: answers commands and status queries, never sends PASSAGE or LANE_CLEAR</i></div>
+  <div class=b><b>PassageTimeoutWorker</b><br><i>calls sweepPassageTimeouts every 0.25 s</i></div>
+  <div class=b><b>demo helpers, stubs</b><br><i>QR issuer, guard sessions, in-memory audit, health, authorization</i></div>
+ </div></div>
+ <div class=layer><div class=lt>domain/ <span class=sub>imports nothing outside domain/</span></div><div class=row>
+  <div class=b><b>models.py</b> <i>Lane, ScanAttempt, TokenReservation, GateCycle, GateCommand, PassageEvent, AttendanceTransaction, SupportCase</i></div>
+  <div class=b><b>enums.py</b> <i>scan, cycle and command states</i><br><b>snapshot.py</b> <i>EligibilitySnapshot, 60 s and 30 min limits</i></div>
+ </div></div>
+ <div class=ttl style="margin-top:7px">src/tmc_gate <span class=sub>one Python process: M1 Gate Core, M3 Gate Intervention, and the demo helpers</span></div>
+</div>
+<div class=below>
+ <div class=ext id=db style="border-radius:12px;flex:1"><b>factory.sqlite3</b><br><i>file chosen with TMC_GATE_DB, written only by sqlite_repos</i></div>
+ <div class=leg>Arrows from the top: HTTP requests to a router. Arrow to the file: SQL through sqlite3. The import rules of Table 9.3 are checked by <i>test_architecture_solid.py</i></div>
+</div>
+<svg id=s width=850 height=1200><defs><marker id=a markerWidth=10 markerHeight=8 refX=9 refY=4 orient=auto><path d="M0,0 L10,4 L0,8 z" fill="#111"/></marker></defs></svg>
 </div>
 <script>
 const W=document.getElementById('w').getBoundingClientRect();
-function r(id){const b=document.getElementById(id).getBoundingClientRect();return {l:b.left-W.left,t:b.top-W.top,r:b.right-W.left,b:b.bottom-W.top,cx:(b.left+b.right)/2-W.left,cy:(b.top+b.bottom)/2-W.top}}
+function r(id){const b=document.getElementById(id).getBoundingClientRect();return {l:b.left-W.left,t:b.top-W.top,r:b.right-W.left,b:b.bottom-W.top,cx:(b.left+b.right)/2-W.left}}
 const s=document.getElementById('s');
-function line(x1,y1,x2,y2,dash){const p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',`M${x1},${y1} L${x2},${y2}`);p.setAttribute('stroke','#111');p.setAttribute('stroke-width','1.3');p.setAttribute('fill','none');if(dash)p.setAttribute('stroke-dasharray','5,4');p.setAttribute('marker-end',dash?'url(#o)':'url(#a)');s.appendChild(p)}
-const api=r('api'),app=r('app'),ports=r('ports'),adp=r('adp'),dom=r('dom'),o=r('outer');
-for(const k of ['kiosk','ctrl','guard']){const e=r(k);line(e.r,e.cy,o.l,e.cy<api.b?Math.max(e.cy,api.t+20):e.cy)}
-// layer dependencies
-line(o.l+60,api.b,o.l+60,app.t,true);
-line(o.l+60,app.b,o.l+60,ports.t,true);
-line(o.r-60,adp.t,o.r-60,ports.b,true);
-const sqr=r("sq");document.getElementById("db").style.top=(sqr.t-10)+"px";document.getElementById("ctrl2").style.top=(sqr.b+10)+"px";const db=r("db"),c2=r("ctrl2");
-document.getElementById("w").style.height=(Math.max(o.b,r("ctrl2").b)+4)+"px";
-line(o.r,db.cy,db.l,db.cy);line(o.r,c2.cy,c2.l,c2.cy);
+function line(x1,y1,x2,y2){const p=document.createElementNS('http://www.w3.org/2000/svg','path');p.setAttribute('d',`M${x1},${y1} L${x2},${y2}`);p.setAttribute('stroke','#111');p.setAttribute('stroke-width','1.4');p.setAttribute('fill','none');p.setAttribute('marker-end','url(#a)');s.appendChild(p)}
+for(const [a,b] of [['kiosk','gc1'],['sig','gc2'],['guard','ic'],['demo','dc']]){const e=r(a),t=r(b);line(t.cx,e.b,t.cx,t.t)}
+const db=r('db'),o=r('outer');line(db.cx,o.b,db.cx,db.t);
 </script></body></html>
