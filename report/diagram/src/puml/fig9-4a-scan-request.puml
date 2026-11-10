@@ -1,0 +1,35 @@
+@startuml
+!include style.iuml
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 4
+skinparam BoxPadding 2
+skinparam defaultFontSize 13
+skinparam noteFontSize 12
+hide footbox
+
+participant "Kiosk\n(Swagger)" as K
+participant "gate_controller\nscan route" as R
+participant "GateCore\nFacade" as F
+participant "GateTransaction\nProcessor" as P
+participant "Access\nDecision" as A
+participant "SQLite\nrepositories" as DB
+participant "SimulatedTurnstile\nAdapter" as T
+
+K -> R : A1 POST\n/api/gate/scans
+R -> F : submitScan()
+F -> P : processScan()
+note right of P : 2,000 ms budget\nstarts here
+P -> DB : A2 get_scan(scanId)
+DB --> P : not found
+P -> A : A3 evaluate()
+A --> P : allowed
+P -> DB : A4 reserve lane + token,\nstore ACCEPTED scan,\ncycle, OPEN command
+DB --> P : committed
+P -> T : A5 openGate(commandId,\nmin(700 ms, time left))
+T --> P : OPEN_CONFIRMED
+P -> DB : A6 scan OPENED\n+ audit + outbox
+P --> F : ScanResult(OPENED)
+F --> R
+R --> K : A7 HTTP 200\n{OPENED, commandId}
+@enduml
