@@ -3,22 +3,20 @@
 \phantomsection
 \addcontentsline{toc}{section}{10. CONCLUSION}
 
-This report presents our architecture for TMC's QR-based attendance and access control system at its two factories. It covers the context and requirements, the architecture characteristics, the choice of style, the logical and physical architecture, the main decisions, the design principles, and a prototype of Gate Core and Gate Intervention for Task 2.
+This report presents our architecture for TMC's QR-based attendance and access control system at its two factories. We started from the context and requirements, chose the main architecture characteristics and a style that fits them, and then described the system through its logical and physical views, its key decisions, and the design principles behind them. For Task 2, we built a prototype of Gate Core and Gate Intervention to check part of this design in code. This chapter sums up the result, lists what is still open, and suggests what should come next.
 
 \subsection*{10.1. Summary of the Architecture}
 
 \phantomsection
 \addcontentsline{toc}{subsection}{10.1. Summary of the Architecture}
 
-\begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{Characteristics.} The six drivers are reliability and data integrity, availability, performance, security and privacy, auditability, and interoperability. A scan has to be answered within 2 seconds, and accepted records must survive a factory's WAN outage.
-  \item \textbf{Style.} Six styles were compared, and we chose Service-based Architecture with Event-driven Integration: a gate application and database at each factory, one central application, and three event feeds between them. Inside, each application is a Modular Monolith.
-  \item \textbf{Logical architecture.} Thirteen modules communicate through public interfaces and two ports, and the C\&C View describes three runtime flows. The gate flow keeps four facts apart: the controller received the command, the gate opened, an employee passed, and the gate closed. Only a linked passage creates automatic attendance (I-07), and an uncertain opening is checked or reconciled, never resent.
-  \item \textbf{Physical architecture.} Each factory has a primary and a standby server. The central site has a reverse proxy pair, two application instances, a database pair, a broker, monitoring, and backups. The 2-second budget is split over the factory-local path with a 200 ms reserve, and a bounded degraded mode keeps the gates working when the WAN link fails, until the last confirmed watermark is 30 minutes old (I-10).
-  \item \textbf{Decisions and principles.} Eleven ADRs record the main choices and their trade-offs. SOLID, cohesion, and coupling keep the module boundaries clear, while short-lived factory-bound QR codes, server-side authorization, audit at the source, and data minimization protect access and personal data.
-\end{itemize}
+Most of our choices come from two needs at the gate: a scan must be answered within 2 seconds at shift change, and an accepted record must not be lost when a factory loses its WAN link. Reliability and data integrity, availability, and performance therefore came first, followed by security and privacy, auditability, and interoperability. After comparing six styles, we chose Service-based Architecture with Event-driven Integration. Each factory has its own factory application and database, one central application handles the shared work, and three event feeds connect them. Inside each application, the code is organized as a Modular Monolith.
 
-The design gives up the simplicity of a single deployment and accepts that central data lags behind the gates. In return, scans stay on the factory LAN, each factory keeps working when its link fails, and every gate record is stored before it leaves the factory.
+The logical view splits the system into thirteen modules that talk only through public interfaces and two ports. The most important part of it is the gate flow, where we treat four things as separate facts: the controller received the command, the gate opened, an employee passed, and the gate closed. Attendance is created automatically only from a linked passage, and an opening whose result is unclear is never sent again: it is checked with the controller where the API allows a status query, and otherwise reconciled. In the physical view, each factory runs a primary and a standby server, and the central site adds redundancy for its proxy, application, and database, plus a broker, monitoring, and backups. Because the whole scan path stays inside the factory, the 2-second budget does not depend on the WAN. When the link fails, the factory can keep accepting scans in a limited degraded mode until its last source-confirmed watermark is 30 minutes old.
+
+Eleven ADRs record the main decisions and what each one costs. SOLID, cohesion, and coupling guided where we drew the module boundaries, while short-lived QR codes bound to one factory, server-side authorization, auditing at the source, and data minimization protect access and personal data.
+
+Overall, the design gives up the simplicity of a single deployment and accepts that central data arrives later than the gate data. What we get in return is that scans never leave the factory LAN, each factory keeps working when its link is down, and every gate record is stored locally before it is sent anywhere else.
 
 \Needspace{9\baselineskip}
 \subsection*{10.2. Limitations and Open Issues}
@@ -26,16 +24,30 @@ The design gives up the simplicity of a single deployment and accepts that centr
 \phantomsection
 \addcontentsline{toc}{subsection}{10.2. Limitations and Open Issues}
 
-
-The prototype in Chapter 9 checks the Gate Core rules on a real SQLite file with a simulated controller, but the design still has to be verified against the real APIs and infrastructure. The main open points are:
+The prototype in Chapter 9 runs the Gate Core rules on a real SQLite file, but it uses a simulated controller and has no Site Sync, central application, or HR/Payroll link. So most of the points below are still design claims. Some of them need checking with the vendors, and others are decisions that only TMC can make:
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
-  \item \textbf{External contracts.} Command receipt, opening confirmation, passage and lane-clear events, close confirmation, status lookup, and duplicate protection must be verified with the real controller (I-01, I-05), and HR/Payroll receipt semantics must be checked (I-02), including whether an acknowledgement means that the data is ready for reconciliation (IC-01).
-  \item \textbf{Gate evidence.} Closing after LANE\_CLEAR with the controller's safety interlock, and counting attendance only after passage, are our assumptions, not capabilities stated in the assignment. If the API has no reliable passage evidence, TMC must add a verified passage sensor before automatic QR attendance is enabled. Until then, cases need documented assistance and HR approval, and OPEN\_CONFIRMED never creates provisional attendance. If safe-closing signals are missing, the closing procedure must be redesigned and tested before operation.
-  \item \textbf{Business and display rules.} TMC must confirm whether shifts restrict physical access as well as attendance aggregation (I-06), and whether the QR code must be shown directly in company email rather than through an authenticated link (I-08).
-  \item \textbf{Degraded mode.} TMC must approve the 60-second and 30-minute limits (I-10). The longer limit bounds acceptance using old access rights to less than 30 minutes after the last confirmed watermark; it does not guarantee that revocations arrive within that time. At the limit, guards use the manual procedure, which needs a staffing plan. A central issuing outage stops automatic scans sooner, within about 60 seconds as existing QR codes expire. The prototype tests both time limits and the DEGRADED flag for one factory (Chapter 9), but the review cases created after reconnection still need testing with Site Sync and the central site.
-  \item \textbf{Anti-replay.} The prototype shows that two concurrent connections cannot claim the same token, but single-use tokens must still be tested under failover and backup restore before disconnected operation is enabled. A code shared live within its 60 seconds is not blocked (Table 5.11), so TMC must decide whether a person check is needed.
-  \item \textbf{Operational targets.} The response-time, failover, recovery, and backup targets must be measured with representative loads and failures.
-  \item \textbf{Infrastructure.} Synchronous replication makes the standby part of every write. When the synchronous commit cannot be met, new scans that would open a gate stop (Section 5.6.2), and TMC must accept this operational impact. Controller links without TLS need network isolation and restricted access.
-  \item \textbf{Data retention.} TMC must confirm retention periods for attendance, support records, audit logs, and backups.
+  \item \textbf{Controller and HR/Payroll APIs.} We assumed that the controller reports command receipt, opening, passage, lane clear, and closing, and that it handles duplicate commands safely (I-01, I-05). These meanings still have to be checked with the vendor. A status query is only an option: the design uses it if the API offers one, and otherwise sends an uncertain result to reconciliation. On the HR/Payroll side, we also assumed what an acknowledgement means (I-02). None of this has been tried against the real systems yet.
+  \item \textbf{Passage evidence and safe closing.} Counting attendance only after a real passage, and closing the gate only after the lane is clear, are our own assumptions. If the controller cannot report passage reliably, TMC would need an extra passage sensor before turning on automatic QR attendance, and cases until then would go through assisted handling and HR approval. A missing lane-clear signal would mean redesigning the closing procedure.
+  \item \textbf{Business and display rules.} It is still unclear whether shifts also limit physical entry or only attendance (I-06), and whether the QR code has to appear directly in company email instead of behind an authenticated link (I-08).
+  \item \textbf{Degraded mode.} The 60-second and 30-minute limits are our proposal and need TMC's approval (I-10). The 30-minute limit only bounds how long old access rights can be used; it does not promise that a revocation arrives within that time. After the limit, guards fall back to the manual procedure, which needs a staffing plan. If central QR issuing is down, automatic scans stop much sooner, within about 60 seconds, as the existing codes expire. The prototype tests both limits for one factory, but the review cases created after reconnection have not been tested with Site Sync and the central site.
+  \item \textbf{Anti-replay.} The prototype shows that two concurrent connections cannot claim the same token. Single-use behavior still has to hold after failover and backup restore. A code shared live within its 60 seconds is also not blocked (Table 5.11), so TMC has to decide whether a person check at the gate is worth the cost.
+  \item \textbf{Performance and recovery.} The 2-second response limit is a requirement (NFR-01), but we have not yet shown that the real system meets it under shift-change load. The failover, recovery, and backup targets are our own proposals and also need to be measured under realistic failures.
+  \item \textbf{Infrastructure and data.} Synchronous replication makes the standby part of every write, so new scans stop when the standby cannot confirm (Section 5.6.2), and TMC has to accept this. Controller links without TLS need a separate network. Retention periods for attendance, support records, audit logs, and backups are also not decided yet.
 \end{itemize}
+
+\Needspace{9\baselineskip}
+\subsection*{10.3. Future Work}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{10.3. Future Work}
+
+If we continued this project, the first step would be to replace the simulated controller with a real one, or at least with the vendor's test interface, because the gate flow depends on signals we have only assumed so far. After that, we would build Site Sync and a minimal central application, so that reconnection and review cases can be tested between two sites instead of inside one process. Next would be the HR/Payroll Handover, once TMC confirms the receipt rules of that API. Finally, we would run load tests at shift-change volume and failover drills on the standby server, to check the NFR-01 limit and the proposed recovery targets in Chapter 5 with measured numbers.
+
+\Needspace{6\baselineskip}
+\subsection*{10.4. Closing Remarks}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{10.4. Closing Remarks}
+
+Working on this system showed us that the hardest part was not drawing the modules but being honest about what we did not know: what the turnstile really reports, how long a factory can safely work offline, and when a scan really means that someone came to work. We tried to keep those questions visible as assumptions instead of hiding them inside the design. The architecture is ready to be checked against TMC's real devices and APIs, and we expect some of its details to change once that happens, while the main structure should stay the same.
