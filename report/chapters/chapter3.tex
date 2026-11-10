@@ -156,7 +156,7 @@ Service-based Architecture often lets all services share one database. We do not
   \item \textbf{AC-04, AC-06:} login and permissions stay central, and both external systems sit behind adapters.
 \end{itemize}
 
-\textbf{How long a factory can run on its own.} Keeping the gate at the factory only helps if the factory can keep going without fresh updates for a while. A 60-second limit on local access-right data is too short for that, since any WAN outage longer than one minute would stop every lane. I-10 therefore adds a bounded degraded mode. After the first 60 seconds, the factory keeps accepting signed, unexpired, single-use QR codes and flags each of these transactions for review. The limit is 30 minutes, which covers one full shift-change peak of about 800 scans.
+\textbf{How long a factory can run on its own.} Keeping the gate at the factory only helps if the factory can keep going for a while without new checkpoints from the central site. A 60-second limit on the age of the local access data is too short for that, since any WAN outage longer than one minute would stop every lane. I-10 therefore adds a bounded degraded mode. Once the last confirmed checkpoint is more than 60 seconds old, the factory keeps accepting signed, unexpired, single-use QR codes and flags each of these transactions for review. Automatic acceptance stops when the checkpoint reaches 30 minutes. This window covers one full shift-change peak of about 800 scans.
 
 Degraded mode only covers the factory's WAN link. Employees' phones still reach the central site over the Internet or the mobile network, so they keep getting new QR codes. If the central application itself is down, no new codes can be issued, and the automatic flow stops within about 60 seconds, when the last codes expire. Guards then switch to TMC's manual procedure.
 
@@ -167,7 +167,7 @@ Degraded mode only covers the factory's WAN link. Employees' phones still reach 
 
 \begin{itemize}[leftmargin=36pt, itemsep=2pt, topsep=4pt, parsep=2pt]
   \item The factory LAN between the factory application, the kiosks, and the controller stays up when the WAN link fails. The assignment does not say this, so we assume it.
-  \item TMC approves the 30-minute degraded mode in I-10 and accepts that an employee whose access was revoked during the window may still pass. Without it, the factory application still keeps the scan path on the LAN and keeps the two factories apart, but the gates stop after 60 seconds without updates.
+  \item TMC approves the 30-minute degraded mode in I-10 and accepts that an employee whose access was revoked during the window may still pass. Without it, the factory application still keeps the scan path on the LAN and keeps the two factories apart, but the gates stop once the last confirmed checkpoint is 60 seconds old.
   \item Employees' phones can reach the central site over the Internet or the mobile network while the factory WAN link is down.
   \item TMC can run and back up one server and one database at each factory.
   \item The HR/Payroll handover can run hours after the gate events, so it is not on the gate path.
@@ -191,7 +191,7 @@ The \textbf{factory application} at each site checks the QR code and the employe
 
 The \textbf{central application} covers access-right and configuration management, attendance consolidation and review, reporting, HR/Payroll handover, identity and RBAC, and the central audit log. These parts are deployed together and share one database engine, even though each module owns its own tables. A failure of the central infrastructure therefore hits all of them at once. Keeping the modules apart in code is not enough to count each one as its own quantum.
 
-\textbf{Synchronization and monitoring} sit between the two. Each application has a synchronization part that exchanges events through the central broker, and Monitoring collects health data, errors, and progress. We do not count quanta by nodes but by what happens to the work when a part stops. If the broker stops, data reaches the other side later. If Monitoring stops, operators lose alerts. In neither case does a scan stop, so neither one forms a quantum of its own.
+\textbf{Synchronization and monitoring} sit between the two. Each application has a synchronization part that exchanges events through the central broker, and Monitoring collects health data, errors, and progress. We do not count quanta by nodes but by what happens to the work when a part stops. If the broker stops, data reaches the other side later. If Monitoring stops, operators lose alerts. Neither of them is called synchronously during an ordinary scan, so we treat them as supporting infrastructure rather than as quanta of their own. A broker outage still matters, though. Each factory tracks a watermark, which is the latest source-confirmed checkpoint up to which its local access data is complete. The central site keeps confirming checkpoints even when no access right has changed, so a quiet day does not make the data look old. While the Access Change Feed cannot move forward, however, the watermark keeps getting older, and once it is 30 minutes old the factory has to stop accepting scans (I-10).
 
 \subsubsection*{3.4.2. Static and Dynamic Coupling}
 
@@ -213,7 +213,7 @@ Kiosk with the factory application; factory application with the controller & Sy
 \hline
 Factory sending gate transactions and support cases to the central site & Asynchronous & Consolidated data arrives later; events wait in the factory outbox. \\
 \hline
-Central site sending access rights and configuration to the factories & Asynchronous & The factory keeps using its local copy within I-10: normal mode for 60 seconds, then degraded mode until 30 minutes after the last confirmed update. \\
+Central site sending access rights and configuration to the factories & Asynchronous & The factory keeps using its local copy within I-10: normal mode for 60 seconds, then degraded mode until its last confirmed checkpoint is 30 minutes old. \\
 \hline
 Central site sending reconciliation decisions; factory confirming that it applied them & Asynchronous & A case linked to a scan that the factory must update stays open until the factory confirms; the attendance change is tracked separately. \\
 \hline
@@ -229,7 +229,7 @@ Sending audit and monitoring data & Asynchronous & Central views are delayed; th
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{3.2}Runtime Dependencies and the Effects of Interruption}
 
 
-\textbf{Quanta.} Putting these results together, processing one scan with a QR code that has already been issued involves \textbf{three quanta}: the two factory applications and the central application. Each one is deployed on its own with its own data, and the factory application does not call the central one during such a scan. A factory keeps scanning through a WAN outage as long as its last confirmed watermark, meaning the most recent access-right update it has confirmed from the central site, is less than 30 minutes old (I-10). A fault at one factory does not affect the other.
+\textbf{Quanta.} Putting these results together, for scans with a QR code that has already been issued, we treat the system as \textbf{three separate quanta}: one at each factory and one at the central site. Each one is deployed on its own with its own data. An individual scan is handled only by the factory application where it happens, which does not call the central one during the scan. A factory keeps scanning through a WAN outage only while its watermark is less than 30 minutes old (I-10). A fault at one factory does not affect the other.
 
 The picture changes if we look at the whole path from issuing a QR code to passing the gate. Employees get new codes from the central application, so this path still depends on it, as explained in Section 3.3. Assisted and emergency opening are similar: the factory application waits for central authorization, so for that operation the factory and the central application act as one quantum.
 
