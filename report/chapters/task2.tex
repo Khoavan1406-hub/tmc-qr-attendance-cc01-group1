@@ -343,7 +343,6 @@ We also ran these steps by hand on a team member's Windows laptop, against a rea
 
 The run in Figure 9.5 only covers the normal path. We ran the same script twice more, each time with a fresh SQLite file, to show what happens when something is not normal. In Figure 9.6 we first aged the access data to 300 seconds: scan S-10 was still OPENED, but with the degraded flag, and the attendance record created from its passage carries the same flag (a). At 1800 seconds the next scan was refused with CANNOT\_PROCESS before any command (b). We then made the access data fresh again and set the simulated controller so that openGate times out and the status query cannot tell the result. Scan S-12 ended as PENDING\_RECONCILIATION, and a new scan on the same lane got LANE\_BUSY because the lane stays held (c). The database shows a single OPEN command for S-12 with the outcome UNDETERMINED (d).
 
-\begin{landscape}
 \noindent\begin{minipage}{\linewidth}
 \centering
 \includegraphics[width=\linewidth]{figure/figure-9-6-degraded-undetermined-run.png}
@@ -352,13 +351,11 @@ The run in Figure 9.5 only covers the normal path. We ran the same script twice 
 \textbf{Figure 9.6. Degraded Mode, CANNOT\_PROCESS, and an Uncertain Opening on Uvicorn}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.6}Degraded Mode and an Uncertain Opening on Uvicorn}
 \end{minipage}
-\end{landscape}
 
 \vspace{10pt}
 
 Figure 9.7 runs the local part of Flow B. An assisted opening without a guard session gets HTTP 401 (a). With the session, the same request sent twice returns the same commandId both times (b). We then played the controller for this assisted opening and sent a PASSAGE right away, well inside the 15-second window, followed by LANE\_CLEAR (c). For a QR scan the same two signals created an attendance record in Figure 9.5. An emergency release puts LANE-BD-01 in EMERGENCY\_HOLD, and a QR scan on that lane gets LANE\_BUSY (d). After the reset and a LANE\_CLEAR the gate is closed and the next scan is OPENED again (e). In the database (f), case-001 has one stored OPEN command and one CLOSE command, the passage PE-30 is stored without a review reason, and there is still no attendance record. So a timely passage through an assisted opening did not create attendance by itself. The run does not show the later HR approval step, which is outside the prototype.
 
-\begin{landscape}
 \noindent\begin{minipage}{\linewidth}
 \centering
 \includegraphics[width=\linewidth]{figure/figure-9-7-flow-b-run.png}
@@ -367,7 +364,6 @@ Figure 9.7 runs the local part of Flow B. An assisted opening without a guard se
 \textbf{Figure 9.7. Flow B on Uvicorn: Guard Session, Assisted Opening with a Passage, and Emergency Hold}
 \phantomsection\addcontentsline{lof}{figure}{\protect\numberline{9.7}Flow B on Uvicorn}
 \end{minipage}
-\end{landscape}
 
 \vspace{10pt}
 
