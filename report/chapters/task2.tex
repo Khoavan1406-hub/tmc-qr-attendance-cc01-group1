@@ -356,7 +356,7 @@ The ``+1'' in the Package 5 row is the expected failure, and it is there on purp
 
 \noindent\begin{minipage}{\linewidth}
 \centering
-\includegraphics[width=0.85\linewidth]{figure/figure-9-4-pytest-run.png}
+\includegraphics[width=0.72\linewidth]{figure/figure-9-4-pytest-run.png}
 
 \vspace{6pt}
 \textbf{Figure 9.4. Output of the Test Suite: 473 Passed and 1 Expected Failure}
@@ -378,22 +378,22 @@ The ten tests in \code{test_e2e_sqlite_flows.py} are the closest our automated t
 For Flow B they show that a request without a guard session gets HTTP 401, that an assisted opening stores the support case once and creates no attendance, and that an emergency hold makes new scans return LANE\_BUSY until the reset, after which LANE\_CLEAR closes the gate. One rule has no end-to-end test: a PASSAGE that arrives after the 15-second window. It is checked only at processor level (\code{test_pkg3_rules.py}) and for storage (\code{test_pkg4_sqlite_repos.py}).
 
 
-We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The manual run in Section 9.5 (Figure 9.3) was done on a real Uvicorn server with a SQLite file. Table 9.7 lists what each part of it shows and where the evidence is. The commands and the server log are kept in \code{report/evidence/}. Clicking through the Swagger page during the presentation is still a manual step.
+We also ran the four demo scenarios of the README through FastAPI's TestClient on a SQLite file, and all of them gave the expected results. The manual run in Section 9.5 (Figure 9.3) was done on a real Uvicorn server with a SQLite file. Table 9.7 lists what each part of it shows. The order of the writes before openGate and the single closeGate call are checked by the tests in Table 9.5, not by this run. The script, the captured output, and the Uvicorn log are kept in \code{report/evidence/}. Clicking through the Swagger page during the presentation is still a manual step.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{22pt}|>{\raggedright\arraybackslash}p{130pt}|>{\raggedright\arraybackslash}p{140pt}|>{\raggedright\arraybackslash}p{106pt}|}
 \hline
-\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{22pt}|}{\textbf{Part}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{130pt}|}{\textbf{What we sent}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{140pt}|}{\textbf{What we observed}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{106pt}|}{\textbf{Rule shown}} \\
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{22pt}|}{\textbf{Part}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{130pt}|}{\textbf{What we sent}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{140pt}|}{\textbf{What we observed}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{106pt}|}{\textbf{What it shows}} \\
 \hline
 \endhead
 \multicolumn{4}{c}{\rule{0pt}{20pt}\normalsize\textbf{Table 9.7. Manual Run of Flow A on Uvicorn with a SQLite File}} \\
 \endlastfoot
-(a) & Scan S-1 with a fresh QR code on LANE-BD-01 & OPENED, OPEN\_CONFIRMED, and a commandId & Store before acting, then open (ADR-02) \\
+(a) & Scan S-1 with a fresh QR code on LANE-BD-01 & OPENED, OPEN\_CONFIRMED, and a commandId & Confirmed opening for a valid scan \\
 \hline
 (b) & Scan S-2 with the same code on LANE-BD-02 & REJECTED, QR\_TOKEN\_\allowbreak REPLAY\_\allowbreak DETECTED, no command & Single-use token claim (ADR-11) \\
 \hline
 (c) & PASSAGE PE-1 twice, then LANE\_CLEAR twice, for the commandId of S-1 & Each request answered with HTTP 200; this alone does not prove deduplication & -- \\*
 \hline\noalign{\nobreak}
-(d) & Read the database file with a separate connection & One attendance record (S-1, PE-1, EMP-001, ENTRY), one passage event, one OPEN and one CLOSE command & Repeated signals give one attendance and one closeGate (I-05, I-07) \\
+(d) & Read the database file with a separate connection & One attendance record (S-1, PE-1, EMP-001, ENTRY), one passage event, one OPEN and one CLOSE command & Repeated signals leave one attendance record and one persisted CLOSE command \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.7}Manual Run of Flow A on Uvicorn with a SQLite File}

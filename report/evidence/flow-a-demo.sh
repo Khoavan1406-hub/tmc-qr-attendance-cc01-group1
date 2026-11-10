@@ -1,5 +1,8 @@
 #!/bin/bash
-B=http://127.0.0.1:8012
+# Start the server first, from the repository root:
+#   PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000
+# then run this script from the same folder as factory.sqlite3.
+B=http://127.0.0.1:8000
 post(){ echo "\$ curl -X POST $1 -d '$3'"; curl -s -X POST $B$1 -H 'content-type: application/json' -d "$2"; echo; echo; }
 QR=$(curl -s -X POST $B/api/demo/qr-tokens -H 'content-type: application/json' -d '{"employeeId":"EMP-001","factoryId":"BD"}' | python3 -c 'import sys,json;print(json.load(sys.stdin)["qrToken"])')
 echo "# QR token issued by the demo issuer for EMP-001 at factory BD -> \$QR"; echo

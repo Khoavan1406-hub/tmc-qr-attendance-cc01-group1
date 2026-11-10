@@ -1,26 +1,26 @@
-# Server: PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app (demo mode, simulated controller)
+# Server: PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000 (demo mode, simulated controller)
 # QR token issued by the demo issuer for EMP-001 at factory BD -> $QR
 
 (a) first scan on LANE-BD-01
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-1","qrToken":"$QR","laneId":"LANE-BD-01"}'
-{"scanId":"S-1","state":"OPENED","laneId":"LANE-BD-01","degradedFlag":false,"reason":"OPEN_CONFIRMED","commandId":"cmd-65db2681b36a"}
+{"scanId":"S-1","state":"OPENED","laneId":"LANE-BD-01","degradedFlag":false,"reason":"OPEN_CONFIRMED","commandId":"cmd-ec9bdca33488"}
 
 (b) same QR token on LANE-BD-02
 $ curl -X POST /api/gate/scans -d '{"scanId":"S-2","qrToken":"$QR","laneId":"LANE-BD-02"}'
 {"scanId":"S-2","state":"REJECTED","laneId":"LANE-BD-02","degradedFlag":false,"reason":"QR_TOKEN_REPLAY_DETECTED","commandId":null}
 
 (c) controller sends PASSAGE PE-1 twice, then LANE_CLEAR twice
-$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-65db2681b36a","laneId":"LANE-BD-01"}'
-{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-65db2681b36a"}
+$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-ec9bdca33488"}
 
-$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-65db2681b36a","laneId":"LANE-BD-01"}'
-{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-65db2681b36a"}
+$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-ec9bdca33488"}
 
-$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-65db2681b36a","laneId":"LANE-BD-01"}'
-{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-65db2681b36a"}
+$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-ec9bdca33488"}
 
-$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-65db2681b36a","laneId":"LANE-BD-01"}'
-{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-65db2681b36a"}
+$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-ec9bdca33488"}
 
 (d) separate sqlite3 connection to factory.sqlite3
 sqlite> SELECT scan_id, state, reason FROM scan_attempts ORDER BY scan_id;
