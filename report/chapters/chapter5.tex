@@ -573,11 +573,11 @@ The M2 assignment adds two issues: the system can lose connectivity while an att
 \multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{62pt}|}{\textbf{Point}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{150pt}|}{\textbf{What can go wrong}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{199pt}|}{\textbf{How the design handles it}} \\
 \hline
 \endhead
-\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.6}Failure Points in a Gate Transaction}\textbf{Table 5.6. Failure Points in a Gate Transaction}} \\
+\multicolumn{3}{c}{\rule{0pt}{20pt}\normalsize\phantomsection\addcontentsline{lot}{table}{\protect\numberline{5.6}Where a Gate Transaction Can Break}\textbf{Table 5.6. Where a Gate Transaction Can Break}} \\
 \endlastfoot
 F1. Kiosk to factory server (LAN) & Gate Core has stored the result, but the response does not reach the kiosk, and the kiosk may send the scan again. & The kiosk keeps the scanId and asks again with the same scanId. Gate Core returns the stored status without a second command or transaction (Section 7.3.2). \\
 \hline
-F2. Factory server to controller & The openGate reply is lost, so nobody knows whether the gate opened. & ACCEPTED, the token claim, and the gate cycle are stored before openGate. A lost reply becomes UNDETERMINED, the controller is queried, and the scan goes to PENDING\_RECONCILIATION if the result is still unknown. openGate is never resent (ADR-02, Section 4.2.5). \\
+F2. Factory server to controller & The openGate reply is lost, so nobody knows whether the gate opened. & ACCEPTED, the token claim, and the gate cycle are stored before openGate. A lost reply becomes UNDETERMINED. The controller is queried where it supports a status query; if it does not, or the result is still unknown, the scan goes to PENDING\_RECONCILIATION. openGate is never resent (ADR-02, Section 4.2.5). \\
 \hline
 F3. Factory to central site (WAN or broker) & Committed events cannot be delivered, and access-right updates stop arriving. & Events wait in the factory outbox and are resent later with their original identifiers (ADR-05). Access data ages: degraded mode after 60 seconds, no automatic scans from 30 minutes (ADR-06, Section 5.7.2). \\
 \hline
@@ -644,13 +644,15 @@ Lost attendance record & The record and its outbox event are committed at the fa
 \hline
 Duplicate record & scanId, tokenId, passageEventId, and eventId are each unique, and central consumers use eventId and version to skip events they have already processed. & Missing versions and the outbox backlog have to be monitored (ADR-05). \\
 \hline
-Gate state unknown & An uncertain opening is queried and then reconciled, never resent, and the lane stays held until the outcome is known. & A held lane may need a guard to step in during the shift peak. \\
+Gate state unknown & An uncertain opening is queried where the controller supports it and otherwise reconciled, never resent, and the lane stays held until the outcome is known. & A held lane may need a guard to step in during the shift peak. \\
 \hline
 Out-of-date access rights & Degraded mode lasts less than 30 minutes, and every scan in it is flagged with its snapshot version for Attendance Review. & A revoked employee can still pass during that window, and the flag cannot undo the entry (I-10). \\*
 \hline\noalign{\nobreak}
 Central site down & Automatic scans stop within about 60 seconds as the shown codes expire, and the manual procedure takes over. & Guard staffing for about 80 arrivals per minute at the peak (Section 5.7.2). \\
 \hline
 \end{longtable}
+
+\textbf{Example: the opening reply is lost.} Scan S-1 on LANE-BD-01 passes the checks, and ACCEPTED, the token claim, the gate cycle, and the OPEN command are committed in one transaction. The controller may now open the gate, but its reply does not arrive within the time left. Gate Core stores UNDETERMINED and keeps the lane and the token held. If a supported status query returns OPEN\_CONFIRMED, Gate Core records OPENED. Confirmed non-execution produces CONTROLLER\_ERROR. If no query is available or the outcome remains unknown, the scan moves to PENDING\_RECONCILIATION. Gate Core does not resend the OPEN command.
 
 \textbf{What the prototype shows.} The Task 2 code covers E2, E3, and the mode rules of E4 for one factory (Chapter 9). Tests on a real SQLite file show that an UNDETERMINED opening becomes PENDING\_RECONCILIATION without a second openGate, that a controller signal sent twice still gives one attendance record, and that the stored state survives an application restart (\code{test_e2e_sqlite_flows.py}). The NORMAL, DEGRADED, and CANNOT\_PROCESS limits are tested in \code{test_pkg1_snapshot.py}. Site Sync, the broker, and the central site are not built, so delivery after reconnection (E5) is shown only in the design.
 
@@ -702,7 +704,7 @@ Short-lived code signed at the central site, bound to one factory and used once 
 \hline
 Code signed by a key kept in the employee's phone & Ties the code to one registered phone. & Needs a device enrollment process and the mobile app on every phone, and does not stop an employee from handing over the phone. \\*
 \hline\noalign{\nobreak}
-Badge or biometric check at the gate & Checks the person, not only the code. & New hardware, slower lanes, and extra personal data to protect (NFR-04). Outside the scope of this design. \\
+Guard or biometric check of the person at the gate & Checks the person who holds the code. A badge alone would only add another credential that can be lent. & New hardware or extra guard work, slower lanes, and extra personal data to protect (NFR-04). Outside the scope of this design. \\
 \hline
 \end{longtable}
 
@@ -731,6 +733,8 @@ T6 & Not blocked. Attendance needs a real passage, and each scan is audited with
 \hline
 \end{longtable}
 
+\textbf{Example: one image at two lanes.} An employee scans a valid code at LANE-BD-01, and a few seconds later a photo of the same code is shown at LANE-BD-02. The first scan claims the tokenId in the same transaction as ACCEPTED, so the second one is stored as REJECTED with QR\_TOKEN\_REPLAY\_DETECTED and audited with its lane and time. The order could also be the other way round. Whichever accepted scan claims the token first wins. Reuse of that token is rejected, but the stored evidence does not establish who presented it.
+
 \textbf{What the prototype shows.} The Task 2 code verifies the factory side of this enhancement with real Ed25519 keys: signature, expiry, factory binding, and key rotation in \code{test_pkg2_*.py}, two connections claiming one token in \code{test_pkg4_sqlite_repos.py}, and a copied code on another lane rejected with QR\_TOKEN\_REPLAY\_DETECTED in \code{test_e2e_sqlite_flows.py}. The QR issuer in the prototype is only a demo helper, not the central issuing service.
 
 \Needspace{9\baselineskip}
@@ -750,7 +754,7 @@ Neither enhancement needs a new module or node. They are rules inside modules th
 \endlastfoot
 M1 Gate Core (factory) & Access Decision checks the signed code and the operating mode; Gate Transaction Processor stores ACCEPTED and the token claim before openGate, handles uncertain results without resending, and writes attendance with its outbox event. \\
 \hline
-M2 Turnstile Integration (factory) & Queries the controller about uncertain commands instead of resending them. \\
+M2 Turnstile Integration (factory) & Queries the controller about uncertain commands where supported; otherwise Gate Core retains the uncertain outcome for reconciliation. \\
 \hline
 M4 Access \& Configuration (central) & QR Credential Issuance signs short-lived codes and keeps the private key; the Access Change Feed sends access rights and confirmed watermarks to the factories. \\
 \hline

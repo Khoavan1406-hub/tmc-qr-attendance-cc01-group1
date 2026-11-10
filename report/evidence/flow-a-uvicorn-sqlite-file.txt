@@ -1,0 +1,35 @@
+# Server: PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000 (demo mode, simulated controller)
+# QR token issued by the demo issuer for EMP-001 at factory BD -> $QR
+
+(a) first scan on LANE-BD-01
+$ curl -X POST /api/gate/scans -d '{"scanId":"S-1","qrToken":"$QR","laneId":"LANE-BD-01"}'
+{"scanId":"S-1","state":"OPENED","laneId":"LANE-BD-01","degradedFlag":false,"reason":"OPEN_CONFIRMED","commandId":"cmd-ec9bdca33488"}
+
+(b) same QR token on LANE-BD-02
+$ curl -X POST /api/gate/scans -d '{"scanId":"S-2","qrToken":"$QR","laneId":"LANE-BD-02"}'
+{"scanId":"S-2","state":"REJECTED","laneId":"LANE-BD-02","degradedFlag":false,"reason":"QR_TOKEN_REPLAY_DETECTED","commandId":null}
+
+(c) controller sends PASSAGE PE-1 twice, then LANE_CLEAR twice
+$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-ec9bdca33488"}
+
+$ curl -X POST /api/controller/signals/passage -d '{"passageEventId":"PE-1","commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"PASSAGE_PROCESSED","passageEventId":"PE-1","commandId":"cmd-ec9bdca33488"}
+
+$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-ec9bdca33488"}
+
+$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-ec9bdca33488","laneId":"LANE-BD-01"}'
+{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-ec9bdca33488"}
+
+(d) separate sqlite3 connection to factory.sqlite3
+sqlite> SELECT scan_id, state, reason FROM scan_attempts ORDER BY scan_id;
+  S-1 | OPENED | OPEN_CONFIRMED
+  S-2 | REJECTED | QR_TOKEN_REPLAY_DETECTED
+sqlite> SELECT scan_id, passage_event_id, employee_id, direction FROM attendance_transactions;
+  S-1 | PE-1 | EMP-001 | ENTRY
+sqlite> SELECT command_type, outcome, COUNT(*) FROM gate_commands GROUP BY command_type, outcome;
+  CLOSE | CLOSED | 1
+  OPEN | OPEN_CONFIRMED | 1
+sqlite> SELECT COUNT(*) FROM passage_events;
+  1
