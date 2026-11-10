@@ -1,0 +1,41 @@
+# Server: PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000 (demo mode, simulated controller)
+(a) assisted opening without a guard session is refused
+$ curl -X POST /api/interventions/assisted-open -d '{"supportCaseId":"case-001","employeeId":"EMP-001","laneId":"LANE-BD-02","reason":"phone battery empty"}'
+HTTP 401
+{"detail":"GUARD_NOT_AUTHENTICATED"}
+
+(b) the same request with a guard session, sent twice
+$ curl -X POST /api/interventions/assisted-open -H 'X-Guard-Session: demo-session-guard-bd-01' -d '{"supportCaseId":"case-001","employeeId":"EMP-001","laneId":"LANE-BD-02","reason":"phone battery empty"}'
+{"supportCaseId":"case-001","state":"OPENED","laneId":"LANE-BD-02","commandId":"cmd-ast-6d46ef494f","reason":"OPEN_CONFIRMED"}
+
+$ curl -X POST /api/interventions/assisted-open -H 'X-Guard-Session: demo-session-guard-bd-01' -d '{"supportCaseId":"case-001","employeeId":"EMP-001","laneId":"LANE-BD-02","reason":"phone battery empty"}'
+{"supportCaseId":"case-001","state":"OPENED","laneId":"LANE-BD-02","commandId":"cmd-ast-6d46ef494f","reason":"OPEN_CONFIRMED"}
+
+(c) emergency release on LANE-BD-01, then a QR scan on that lane
+$ curl -X POST /api/interventions/emergency-release -H 'X-Guard-Session: demo-session-guard-bd-01' -d '{"supportCaseId":"emg-001","laneId":"LANE-BD-01","reason":"fire alarm"}'
+{"supportCaseId":"emg-001","state":"OPENED","laneId":"LANE-BD-01","commandId":"cmd-emg-6ea3eec916","reason":"EMERGENCY_HOLD"}
+
+$ curl -X POST /api/gate/scans -d '{"scanId":"S-20","qrToken":"$QR_EMP002","laneId":"LANE-BD-01"}'
+{"scanId":"S-20","state":"LANE_BUSY","laneId":"LANE-BD-01","degradedFlag":false,"reason":"LANE_HAS_ACTIVE_OR_UNRESOLVED_CYCLE","commandId":null}
+
+(d) reset, then LANE_CLEAR closes the gate and the lane takes scans again
+$ curl -X POST /api/interventions/emergency-reset -H 'X-Guard-Session: demo-session-guard-bd-01' -d '{"supportCaseId":"emg-001","laneId":"LANE-BD-01"}'
+{"supportCaseId":"emg-001","state":"OPENED","laneId":"LANE-BD-01","commandId":"cmd-rst-d4830d5b13","reason":"EMERGENCY_RESET_CONFIRMED"}
+
+$ curl -X POST /api/controller/signals/lane-clear -d '{"commandId":"cmd-emg-6ea3eec916","laneId":"LANE-BD-01"}'
+{"status":"LANE_CLEAR_PROCESSED","commandId":"cmd-emg-6ea3eec916"}
+
+$ curl -X POST /api/gate/scans -d '{"scanId":"S-21","qrToken":"$QR_EMP002_new","laneId":"LANE-BD-01"}'
+{"scanId":"S-21","state":"OPENED","laneId":"LANE-BD-01","degradedFlag":false,"reason":"OPEN_CONFIRMED","commandId":"cmd-42b20bc685a3"}
+
+(e) separate sqlite3 connection to factory.sqlite3
+sqlite> SELECT support_case_id, lane_id FROM support_cases ORDER BY support_case_id;
+  case-001 | LANE-BD-02
+  emg-001 | LANE-BD-01
+sqlite> SELECT support_case_id, command_type, outcome FROM gate_commands WHERE support_case_id IS NOT NULL ORDER BY issued_at;
+  case-001 | OPEN | OPEN_CONFIRMED
+  emg-001 | EMERGENCY_RELEASE | EMERGENCY_RELEASED
+  emg-001 | RESET | RESET_CONFIRMED
+  emg-001 | CLOSE | CLOSED
+sqlite> SELECT COUNT(*) AS attendance_records FROM attendance_transactions;
+  0

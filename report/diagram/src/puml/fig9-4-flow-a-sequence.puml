@@ -1,0 +1,46 @@
+@startuml
+!include style.iuml
+skinparam sequenceMessageAlign left
+skinparam responseMessageBelowArrow true
+skinparam ParticipantPadding 6
+skinparam BoxPadding 4
+skinparam defaultFontSize 12
+hide footbox
+
+participant "Kiosk\n(Swagger)" as K
+participant "gate_controller\n(router)" as R
+participant "GateCoreFacade" as F
+participant "GateTransaction\nProcessor" as P
+participant "AccessDecision" as A
+participant "SqliteUnitOfWork\nSqlite*Repository" as DB
+participant "Simulated\nTurnstileAdapter" as T
+participant "Controller\n(simulated)" as C
+
+K -> R : A1 POST /api/gate/scans\n(scanId, qrToken, laneId)
+R -> F : submitScan()  [IScanSubmission]
+F -> P : processScan()
+note right of P : budget starts here:\n2,000 ms, no kiosk deadline
+P -> DB : A2 get_scan(scanId)
+DB --> P : none (new scan)
+P -> A : A3 evaluate(qrToken, laneId)
+A --> P : DecisionResult(allowed, claims, operatingMode)
+P -> DB : A4 atomic_reserve_lane_claim_token_and_accept()\nACCEPTED + TokenReservation + GateCycle + OPEN command
+DB --> P : committed
+P -> T : A5 openGate(commandId, timeout = min(700 ms, time left))
+T --> P : OPEN_CONFIRMED
+P -> DB : A6 update_opening_outcome()\nscan OPENED + audit + outbox, one transaction
+P --> F : ScanResult(OPENED)
+F --> R
+R --> K : A7 HTTP 200 {state: OPENED, commandId}
+
+== later, independent of the kiosk request ==
+C -> R : A8 POST /api/controller/signals/passage
+R -> P : onPassage()  [IPassageEvents]
+P -> DB : store_passage_and_attendance_atomic()\nPassageEvent + AttendanceTransaction (if still OPENED, < 15 s)
+C -> R : A9 POST /api/controller/signals/lane-clear
+R -> P : onLaneClear()  [IPassageEvents]
+P -> DB : save CLOSE_SENT + closeCommandId
+P -> T : closeGate(closeCommandId)
+T --> P : CLOSED
+P -> DB : store CLOSED, release lane
+@enduml

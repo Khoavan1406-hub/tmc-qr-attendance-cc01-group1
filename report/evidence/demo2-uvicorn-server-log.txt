@@ -1,0 +1,23 @@
+$ PYTHONPATH=src TMC_GATE_DB=factory.sqlite3 uvicorn tmc_gate.api.app:app --port 8000
+INFO:     Started server process [1265]
+INFO:     Waiting for application startup.
+INFO:     Application startup complete.
+INFO:     Uvicorn running on http://127.0.0.1:8000 (Press CTRL+C to quit)
+INFO:     127.0.0.1:57660 - "POST /api/demo/watermark-age HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57662 - "POST /api/demo/qr-tokens HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57678 - "POST /api/gate/scans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57694 - "POST /api/controller/signals/passage HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57710 - "POST /api/controller/signals/lane-clear HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57720 - "POST /api/demo/watermark-age HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57726 - "POST /api/demo/qr-tokens HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57742 - "POST /api/gate/scans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57752 - "POST /api/demo/watermark-age HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57758 - "POST /api/demo/controller-mode HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57774 - "POST /api/demo/qr-tokens HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57786 - "POST /api/gate/scans HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57794 - "POST /api/demo/qr-tokens HTTP/1.1" 200 OK
+INFO:     127.0.0.1:57806 - "POST /api/gate/scans HTTP/1.1" 200 OK
+INFO:     Shutting down
+INFO:     Waiting for application shutdown.
+INFO:     Application shutdown complete.
+INFO:     Finished server process [1265]
