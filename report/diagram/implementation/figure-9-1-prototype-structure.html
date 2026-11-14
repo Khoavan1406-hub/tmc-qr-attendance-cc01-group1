@@ -28,7 +28,7 @@ svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
   <div class=b id=ic><b>intervention_controller</b><br><i>holds GateInterventionFacade and IGuardIdentityApi</i></div>
   <div class=b id=dc><b>demo_controller</b><br><i>holds the QR issuer, snapshot and attendance repositories, ControllerApiClient</i></div>
  </div><div class=lt style="margin:5px 0 0">api/ <span class=sub>routers translate HTTP; app.py is the composition root</span></div></div>
- <div class=layer><div class=lt>application/ <span class=sub>imports only ports/ and domain/</span></div><div class=row>
+ <div class=layer><div class=lt>application/ <span class=sub>project imports: ports/ and domain/ only; external: cryptography (Ed25519 check)</span></div><div class=row>
   <div class=b><b>GateCoreFacade</b><br><i>implements IScanSubmission, IInterventionRequest, IFactoryUpdates; uses the processor and repository ports</i></div>
   <div class=b><b>GateTransactionProcessor</b><br><i>Flow A; implements IPassageEvents; uses the command, repository and cross-cutting ports</i></div>
   <div class=b><b>AccessDecision</b><br><i>signature, expiry, factory, snapshot rights</i></div>
@@ -39,7 +39,7 @@ svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
   <div class=b><b>turnstile.py</b><br>IOpenGate, ICloseGate, IEmergencyGate, IControllerStatusQuery, IPassageEvents</div>
   <div class=b style="flex:1.5"><b>repositories.py</b><br>IUnitOfWork, scan, attendance, outbox and snapshot repositories, IPassageWindowQuery; IAuditApi, IHealthApi, IAuthorizationApi, IGuardIdentityApi</div>
  </div></div>
- <div class=layer><div class=lt>adapters/ <span class=sub>implement the ports; may use sqlite3 and cryptography</span></div><div class=row>
+ <div class=layer><div class=lt>adapters/ <span class=sub>implement the ports; external: sqlite3, cryptography</span></div><div class=row>
   <div class=b id=sq><b>sqlite_repos</b><br>SqliteUnitOfWork and the Sqlite repositories</div>
   <div class=b id=ta style="flex:1.5"><b>turnstile_adapter</b><br>SimulatedTurnstileAdapter, FaultyTurnstileAdapter<br><b>ControllerApiClient</b> <i>= the simulated controller: answers commands and status queries, never sends PASSAGE or LANE_CLEAR</i></div>
   <div class=b><b>PassageTimeoutWorker</b><br><i>calls sweepPassageTimeouts every 0.25 s</i></div>
@@ -53,7 +53,7 @@ svg{position:absolute;left:0;top:0;overflow:visible;pointer-events:none}
 </div>
 <div class=below>
  <div class=ext id=db style="border-radius:12px;flex:1"><b>factory.sqlite3</b><br><i>file chosen with TMC_GATE_DB, written only by sqlite_repos</i></div>
- <div class=leg>Arrows from the top: HTTP requests to a router. Arrow to the file: SQL through sqlite3. The import rules of Table 9.3 are checked by <i>test_architecture_solid.py</i></div>
+ <div class=leg>Arrows from the top: HTTP requests to a router. Arrow to the file: SQL through sqlite3. The project import rules of Table 9.3 are checked by <i>test_architecture_solid.py</i></div>
 </div>
 <svg id=s width=850 height=1200><defs><marker id=a markerWidth=10 markerHeight=8 refX=9 refY=4 orient=auto><path d="M0,0 L10,4 L0,8 z" fill="#111"/></marker></defs></svg>
 </div>

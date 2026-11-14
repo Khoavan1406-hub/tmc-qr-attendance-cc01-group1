@@ -47,13 +47,7 @@ Since there is no real controller, central application, or standby server, the p
 \phantomsection
 \addcontentsline{toc}{subsection}{9.2. Technology Stack and Repository}
 
-The source code, the tests, and the LaTeX source of this report are kept together in one GitHub repository:
-
-\begin{center}
-{\small\url{https://github.com/Khoavan1406-hub/tmc-qr-attendance-cc01-group1}}
-\end{center}
-
-The submitted version is the commit on the \texttt{main} branch with the tag \texttt{m2-submission}. Table 9.2 shows the tools we used and why each one fits this prototype.
+The code, the tests, and the source of this report are kept in one GitHub repository, described in Section 9.9. Table 9.2 shows the tools we used and why each one fits this prototype.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{90.5pt}|>{\raggedright\arraybackslash}p{120.5pt}|>{\raggedright\arraybackslash}p{199.5pt}|}
 \hline
@@ -100,7 +94,7 @@ The code lives in one Python package, \code{src/tmc_gate}. We describe it in fou
 \phantomsection
 \addcontentsline{toc}{subsubsection}{9.3.1. Folders and Layers}
 
-The folders follow the Entry, Business, and Persistence layers of Gate Core in Figure 4.2 (Section 4.1.6). The interfaces that Gate Core owns have their own folder, \code{ports/}, between the business rules and the adapters, so the business code can depend on them without knowing which adapter is behind them. Table 9.3 shows what each folder holds and what it is allowed to import. We did not want this to stay a convention that people could forget, so \code{tests/test_architecture_solid.py} reads the import statements of every file and fails when a layer imports something it should not.
+The folders follow the Entry, Business, and Persistence layers of Gate Core in Figure 4.2 (Section 4.1.6). The interfaces that Gate Core owns have their own folder, \code{ports/}, between the business rules and the adapters, so the business code can depend on them without knowing which adapter is behind them. Table 9.3 shows what each folder holds and what it is allowed to import. The last column separates imports between our own folders from external libraries: the import tests only forbid the application layer from using storage, web, and adapter code, so AccessDecision may use the \texttt{cryptography} library directly to verify the Ed25519 signature. We did not want this to stay a convention that people could forget, so \code{tests/test_architecture_solid.py} reads the import statements of every file and fails when a layer imports something it should not.
 
 \begin{longtable}{|>{\raggedright\arraybackslash}p{86.5pt}|>{\raggedright\arraybackslash}p{194.5pt}|>{\raggedright\arraybackslash}p{129.5pt}|}
 \hline
@@ -113,9 +107,9 @@ The folders follow the Entry, Business, and Persistence layers of Gate Core in F
 \hline
 \code{ports/} & Interfaces owned by Gate Core: IScanSubmission, IInterventionRequest, IFactoryUpdates, the turnstile ports, IUnitOfWork, the repository ports, IPassageWindowQuery, and the cross-cutting ports. & \code{domain/} \\
 \hline
-\code{application/} & AccessDecision, GateTransactionProcessor, GateCoreFacade, InterventionService, and GateInterventionFacade. & \code{domain/}, \code{ports/} \\
+\code{application/} & AccessDecision, GateTransactionProcessor, GateCoreFacade, InterventionService, and GateInterventionFacade. & \code{domain/}, \code{ports/}; external library: \texttt{cryptography} (Ed25519 check in AccessDecision) \\
 \hline
-\code{adapters/} & SQLite repositories and unit of work, PassageTimeoutWorker, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers, plus \texttt{sqlite3} and \texttt{cryptography} \\*
+\code{adapters/} & SQLite repositories and unit of work, PassageTimeoutWorker, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers; external libraries: \texttt{sqlite3}, \texttt{cryptography} \\*
 \hline\noalign{\nobreak}
 \code{api/} & FastAPI routers for the kiosk, the controller signals, the guard actions, and the demo helpers. \code{app.py} is the composition root that creates every object and passes the adapters in. & Everything \\
 \hline
@@ -226,7 +220,7 @@ Figure 9.3 is a screenshot of the Swagger page of the running prototype. The end
 
 \vspace{10pt}
 
-Table 9.5 lists the same endpoints with what each router is given in \code{app.py}. The kiosk and signal routes only get a port, so they cannot start an intervention. The guard routes get GateInterventionFacade and, for the session check, IGuardIdentityApi; they have no way to submit a scan. The demo routes are wired directly to demo helpers, which is acceptable only because they are not mounted outside demo mode.
+Table 9.5 lists the same endpoints with what each router is given in \code{app.py}. The kiosk and signal routes are typed with a port, so the dependency they declare is narrow. This is not an access control by itself: in Python, \code{app.py} still passes the whole GateCoreFacade object to the kiosk router. What keeps a kiosk from starting an intervention is that no kiosk endpoint calls such an operation, and that the guard endpoints check the guard session on the server. The guard routes get GateInterventionFacade and, for that session check, IGuardIdentityApi. The demo routes are wired directly to demo helpers, which is acceptable only because they are not mounted outside demo mode.
 
 \noindent\begin{minipage}{\linewidth}
 \centering
@@ -271,17 +265,19 @@ Table 9.5 lists the same endpoints with what each router is given in \code{app.p
 \phantomsection
 \addcontentsline{toc}{subsection}{9.4. SOLID in the Code}
 
-Section 7.1 explains how SOLID shaped the modules on paper. Here we look at where each principle shows up in the code and which test would fail if we broke it.
+Section 7.1 explains how SOLID shaped the modules on paper. Here we look at where each principle shows up in the code and, where one exists, which test checks it.
 
-The single responsibility principle is easiest to see in the application layer. AccessDecision (\code{application/access_decision.py}) only checks the token against the snapshot and returns a DecisionResult. It has no turnstile port, so it cannot open a gate even by mistake. The rules about how fresh the access data must be live in EligibilitySnapshot (\code{domain/snapshot.py}), the gate cycle lives in GateTransactionProcessor, and InterventionService only checks what a guard is allowed to do and leaves the gate commands to Gate Core. Because of this split, \code{test_pkg1_snapshot.py} can test the snapshot rules alone, and \code{test_pkg2_access_decision.py} can call AccessDecision.evaluate twice on the same data and check that it gives the same answer without changing anything.
+The single responsibility principle is about actors: a module should answer to one group of people who ask for the same kind of change. ``One reason to change'' says the same thing, as long as the reason is traced back to who asks for it. In our code, the gate rules are asked for by the people who run the factory gates and security, while shift and payroll rules come from HR. Because of I-06, a change in the shift or attendance rules of HR does not reach the gate decision: AccessDecision (\code{application/access_decision.py}) only checks the token against the snapshot and returns a DecisionResult, and it has no shift input and no turnstile port. The rules about how fresh the access data must be live in EligibilitySnapshot (\code{domain/snapshot.py}), and InterventionService only checks what a guard is allowed to do and leaves the gate commands to Gate Core.
 
-For the open/closed principle, the place that changes is the controller. A new turnstile model would be a new class in \code{adapters/} that implements ITurnstileControl, and only \code{api/app.py} decides which adapter to use. \code{test_pkg5_adapter_with_processor.py} runs the same GateTransactionProcessor with both adapter classes we have, and the processor did not need any change for the second one.
+GateTransactionProcessor is the largest class, and its size alone does not show that SRP holds or fails. Its responsibility is to coordinate the life cycle of one gate transaction: accept the scan, reserve the lane, open, handle PASSAGE and LANE\_CLEAR, close, and handle the emergency commands on the same lane. The eligibility check, the storage, and the controller protocol have been moved out to AccessDecision, the repositories, and the adapters, so a change in one of them does not edit the processor. GateCoreFacade is a thin entry point that turns the inbound ports into processor calls; its name is not evidence of SRP either. Because of the split, \code{test_pkg1_snapshot.py} can test the snapshot rules alone, and \code{test_pkg2_access_decision.py} can call AccessDecision.evaluate twice on the same data and check that it gives the same answer without changing anything.
+
+For the open/closed principle, the place that changes is the controller. The ports in \code{ports/turnstile.py} belong to Gate Core, and the adapters depend on them, not the other way round. A new turnstile model would be a new class in \code{adapters/} that implements ITurnstileControl, and \code{api/app.py} decides which adapter is passed in. This is close to the Strategy idea from the lecture: the processor keeps its rules and only the object behind the port is swapped. \code{test_pkg5_adapter_with_processor.py} runs the same GateTransactionProcessor with both adapter classes we have, and the processor did not need any change for the second one.
 
 The Liskov substitution principle matters most for the meaning of a controller result. The port file \code{ports/turnstile.py} fixes the set of results that each command may return. A receipt or a timeout must come back as UNDETERMINED, not as OPEN\_CONFIRMED or CONTROLLER\_ERROR. One contract test file, \code{test_pkg5_turnstile_contract.py}, runs the same checks against SimulatedTurnstileAdapter and FaultyTurnstileAdapter, and both pass. We also wrote a third adapter that reports a receipt as OPEN\_CONFIRMED. It fails the same contract, and this test is marked as an expected failure on purpose.
 
-Interface segregation shows in how GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, InterventionService only receives IInterventionRequest, and the controller routes only receive IPassageEvents. On the other side, the processor depends on IOpenGate, ICloseGate, and IEmergencyGate one by one, even though one adapter class implements all three as ITurnstileControl. \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear.
+Interface segregation is judged from the consumer's side. It shows in how GateCoreApi is split into IScanSubmission, IInterventionRequest, and IFactoryUpdates (\code{ports/inbound.py}). The kiosk router only receives IScanSubmission, InterventionService only receives IInterventionRequest, and the controller routes only receive IPassageEvents. On the other side, the processor depends on IOpenGate, ICloseGate, and IEmergencyGate one by one, even though one adapter class implements all three as ITurnstileControl. \code{test_interface_segregation_principle_contracts} checks that the kiosk interface has no intervention or sync operation and that IPassageEvents has only onPassage and onLaneClear. The split is not complete everywhere: IScanRepository still has 14 operations, all used by the processor, while GateCoreFacade only uses get\_scan and save\_scan. Section 8.2 discusses this limitation.
 
-Dependency inversion is what made the group work possible. GateTransactionProcessor receives all its ports and its IUnitOfWork through the constructor, and the application layer does not import \texttt{sqlite3}, \texttt{fastapi}, \code{adapters/}, or \code{api/}; three import tests in \code{test_architecture_solid.py} check this. We wrote and merged the ports before anything else, so six people could work in parallel against fakes. Packages 1, 3, and 6 were finished and tested before the SQLite repositories or the turnstile adapter existed.
+Dependency inversion is what made the group work possible. GateTransactionProcessor receives all its ports and its IUnitOfWork through the constructor, and the application layer does not import \texttt{sqlite3}, \texttt{fastapi}, \code{adapters/}, or \code{api/}. \code{api/app.py} is the composition root: it creates the main dependencies (the SQLite repositories and unit of work, the turnstile adapter, the processor, the facades, and the timeout worker) and connects them. In \code{test_architecture_solid.py}, three import tests check the domain, ports, and application layers one by one, and a fourth test checks the ISP splits. These tests check the direction of dependencies and the shape of the ports; they do not prove all five principles, and SRP and OCP in particular are design judgements supported by the examples above. We wrote and merged the ports before anything else, so six people could work in parallel against fakes. Packages 1, 3, and 6 were finished and tested before the SQLite repositories or the turnstile adapter existed.
 
 Only one port was added after that point. While checking the code before submission we found that a cycle with no PASSAGE could stay OPENED, because nothing triggered the 15-second timeout once LANE\_CLEAR had already released the lane. The processor needed a way to find such cycles by their own state, so we added the small read port IPassageWindowQuery (\code{list_cycles_awaiting_passage}, \code{get_cycle_by_scan}) instead of putting two more methods on IScanRepository. SqliteScanRepository implements it, and PassageTimeoutWorker uses it through the processor (Section 9.5, step A8).
 
@@ -525,3 +521,18 @@ Table 9.8 only states what can be seen in the HTTP answers and in the database f
 Passing tests do not close the open issues listed in Section 10.2. The simulated controller answers commands the way I-01 and I-03 assume, and the PASSAGE and LANE\_CLEAR signals of I-05 are sent by the tests and scripts, so the runs show that Gate Core handles those signals correctly, but not that a real controller sends them. The tests check how the 2-second budget is shared out using a test clock; they do not measure the response time on factory hardware with a real kiosk and controller. There is also a gap in the budget itself. The prototype starts a 2,000 ms processing budget when processScan begins, because the HTTP route does not pass a kiosk deadline. This budget does not reserve the kiosk, network, and display time allocated in Table 5.4. Meeting NFR-01 requires budgeting those stages together and measuring from QR reading to result display. SQLite has no standby, so the synchronous replication and the failover rules of Section 5.6 are not tested either.
 
 Synchronization is only partly there. IFactoryUpdates applies snapshot changes and reads the local outbox, but without Site Sync or a central application we drive degraded mode by setting the age of the access data by hand. Finally, the guard session and the authorization checks are demo stubs, and the QR private key is created in the same process as the factory code, which the target design does not allow.
+
+
+\Needspace{9\baselineskip}
+\subsection*{9.9. Source Code}
+
+\phantomsection
+\addcontentsline{toc}{subsection}{9.9. Source Code}
+
+The implementation, the automated tests, and the LaTeX source of this report are available at
+
+\begin{center}
+{\small\url{https://github.com/Khoavan1406-hub/tmc-qr-attendance-cc01-group1}}
+\end{center}
+
+The Python package is in \code{src/tmc_gate/}, the tests are in \code{tests/}, and the report source is in \code{report/}. The \code{README.md} file at the root of the repository explains how to install the dependencies, run the test suite, and start the demo, while \code{ARCHITECTURE_RULES.md} records the rules we followed when writing the code, such as the allowed import directions and the gate thresholds. The architectural decisions themselves are not kept as separate files in the repository; they are documented in Chapter 6. All work was merged into the \texttt{dev} branch through pull requests. The code in \code{src/} and \code{tests/} has not changed since commit 5bd6721, which is the commit behind the test results in Section 9.7.
