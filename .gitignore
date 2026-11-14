@@ -227,3 +227,33 @@ __marimo__/
 *.db-wal
 *.db-shm
 
+# Report and supporting notes are delivered separately from the code repository
+/report/
+/docs/
+/ARCHITECTURE_RULES.md
+/test-results-*.md
+/review-*.md
+/STATUS*.md
+
+# Local AI/editor tooling and indexes
+.claude/
+.gitnexus/
+.codex/
+.agents/
+AGENTS.md
+CLAUDE.md
+/.gitnexusrc*
+/.gitnexusignore
+/.mcp.json
+
+# Local review screenshots, build scratch space, and pytest cleanup leftovers
+/.tmp*
+/pytest-cache-files-*/
+
+# SQLite sidecars (including file-backed demo sessions)
+*.sqlite-journal
+*.sqlite-wal
+*.sqlite-shm
+*.sqlite3-journal
+*.sqlite3-wal
+*.sqlite3-shm

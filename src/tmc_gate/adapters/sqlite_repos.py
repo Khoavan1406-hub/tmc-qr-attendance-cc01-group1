@@ -1,15 +1,35 @@
-"""[PACKAGE 4] SQLite persistence adapters for M1 Gate Core (Figure 4.2, Table 4.7, §5.6.1, ADR-02, ADR-05, ADR-11).
+"""[PACKAGE 4] SQLite Unit of Work and Persistence adapters for M1 Gate Core (Figure 4.2, Table 4.7, §5.6.1, ADR-02, ADR-05, ADR-11).
 
-Enforces atomic transactions for:
-1. Reserve lane (active GateCycle) + Claim tokenId (TokenReservation) + Persist ScanAttempt(ACCEPTED).
-2. Store PassageEvent + at most one original AttendanceTransaction per scanId + Outbox event + Audit evidence.
+Transaction rules:
+- SqliteUnitOfWork implements IUnitOfWork (begin / commit / rollback).
+- Every repository receives the transaction context from IUnitOfWork and NEVER opens or commits transactions on its own.
+- Supports 1 GateCycle -> 0..* PassageEvent (each passageEventId accepted once; at most 1 original AttendanceTransaction per scanId).
+- Supports simulated consumer deduplication keyed by (consumer, eventId) with payload conflict detection.
 """
 
 from __future__ import annotations
 
+import hashlib
+import json
 import sqlite3
 import threading
+import time
+import uuid
+from collections.abc import Callable
+from copy import deepcopy
+from dataclasses import replace
+from datetime import UTC, datetime
+from types import TracebackType
 
+from tmc_gate.domain.enums import (
+    ClosureStatus,
+    CommandOutcome,
+    CommandType,
+    DedupStatus,
+    Direction,
+    PassageStatus,
+    ScanState,
+)
 from tmc_gate.domain.models import (
     AttendanceTransaction,
     GateCommand,
@@ -20,20 +40,25 @@ from tmc_gate.domain.models import (
     SupportCase,
     TokenReservation,
 )
-from tmc_gate.domain.snapshot import EligibilitySnapshot
+from tmc_gate.domain.snapshot import EligibilitySnapshot, EmployeeRight
 from tmc_gate.ports.repositories import (
     IAttendanceRepository,
     IOutboxRepository,
+    IPassageWindowQuery,
     IScanRepository,
     ISnapshotRepository,
+    IUnitOfWork,
 )
 
 
-def create_sqlite_connection(db_path: str = ":memory:") -> sqlite3.Connection:
-    """Create a thread-safe SQLite connection configured for explicit transactions."""
-    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None)
+def create_sqlite_connection(db_path: str = ":memory:", busy_timeout_ms: int = 2_000) -> sqlite3.Connection:
+    """Create a thread-safe SQLite connection configured for explicit UnitOfWork transactions."""
+    conn = sqlite3.connect(db_path, check_same_thread=False, isolation_level=None, timeout=busy_timeout_ms / 1000.0)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON;")
+    conn.execute(f"PRAGMA busy_timeout = {int(busy_timeout_ms)};")
+    if db_path != ":memory:":
+        conn.execute("PRAGMA journal_mode = WAL;")
     return conn
 
 
@@ -63,11 +88,12 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
         );
 
         CREATE TABLE IF NOT EXISTS token_reservations (
-            token_id TEXT PRIMARY KEY,
+            token_id TEXT NOT NULL,
             scan_id TEXT NOT NULL UNIQUE,
             factory_id TEXT NOT NULL,
             claimed_at TEXT NOT NULL,
-            expires_at TEXT NOT NULL
+            expires_at TEXT NOT NULL,
+            PRIMARY KEY (factory_id, token_id)
         );
 
         CREATE TABLE IF NOT EXISTS gate_cycles (
@@ -78,7 +104,9 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             passage_status TEXT NOT NULL,
             closure_status TEXT NOT NULL,
             observation_deadline TEXT NOT NULL,
-            lane_clear_received INTEGER NOT NULL DEFAULT 0
+            lane_clear_received INTEGER NOT NULL DEFAULT 0,
+            close_command_id TEXT,
+            emergency_support_case_id TEXT
         );
 
         CREATE TABLE IF NOT EXISTS gate_commands (
@@ -97,7 +125,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             command_id TEXT NOT NULL,
             cycle_id TEXT NOT NULL,
             lane_id TEXT NOT NULL,
-            occurred_at TEXT NOT NULL
+            occurred_at TEXT NOT NULL,
+            review_reason TEXT
         );
 
         CREATE TABLE IF NOT EXISTS attendance_transactions (
@@ -110,7 +139,8 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             direction TEXT NOT NULL,
             occurred_at TEXT NOT NULL,
             source TEXT NOT NULL,
-            degraded_flag INTEGER NOT NULL DEFAULT 0
+            degraded_flag INTEGER NOT NULL DEFAULT 0,
+            snapshot_version INTEGER NOT NULL DEFAULT 0
         );
 
         CREATE TABLE IF NOT EXISTS support_cases (
@@ -136,12 +166,208 @@ def init_sqlite_schema(conn: sqlite3.Connection) -> None:
             payload_json TEXT NOT NULL,
             created_at TEXT NOT NULL
         );
+
+        CREATE TABLE IF NOT EXISTS eligibility_snapshots (
+            factory_id TEXT PRIMARY KEY,
+            snapshot_version INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            updated_at TEXT NOT NULL
+        );
+
+        CREATE TABLE IF NOT EXISTS processed_events (
+            consumer TEXT NOT NULL,
+            event_id TEXT NOT NULL,
+            payload_hash TEXT NOT NULL,
+            conflict_flagged INTEGER NOT NULL DEFAULT 0,
+            processed_at TEXT NOT NULL,
+            PRIMARY KEY (consumer, event_id)
+        );
         """
+    )
+    # Upgrade existing factory files without discarding stored evidence.
+    with SqliteUnitOfWork(conn) as uow:
+        for table, column in (
+            ("gate_cycles", "close_command_id"),
+            ("gate_cycles", "emergency_support_case_id"),
+            ("passage_events", "review_reason"),
+        ):
+            if column not in {row["name"] for row in conn.execute(f"PRAGMA table_info({table})")}:
+                conn.execute(f"ALTER TABLE {table} ADD COLUMN {column} TEXT")
+        # Cycles stored before emergency_support_case_id existed: the emergency that holds the lane is the
+        # LATEST emergencyRelease command of that cycle, not the cycle's first support case.
+        conn.execute(
+            """UPDATE gate_cycles SET emergency_support_case_id = (
+                   SELECT c.support_case_id FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE'
+                   ORDER BY c.rowid DESC LIMIT 1)
+               WHERE emergency_support_case_id IS NULL AND EXISTS (
+                   SELECT 1 FROM gate_commands c
+                   WHERE c.cycle_id = gate_cycles.cycle_id AND c.command_type = 'EMERGENCY_RELEASE')"""
+        )
+        token_pk = {row["name"] for row in conn.execute("PRAGMA table_info(token_reservations)") if row["pk"]}
+        if token_pk == {"token_id"}:
+            conn.execute("ALTER TABLE token_reservations RENAME TO token_reservations_legacy")
+            conn.execute(
+                """CREATE TABLE token_reservations (
+                    token_id TEXT NOT NULL, scan_id TEXT NOT NULL UNIQUE, factory_id TEXT NOT NULL,
+                    claimed_at TEXT NOT NULL, expires_at TEXT NOT NULL, PRIMARY KEY (factory_id, token_id)
+                )"""
+            )
+            conn.execute("INSERT INTO token_reservations SELECT * FROM token_reservations_legacy")
+            conn.execute("DROP TABLE token_reservations_legacy")
+        uow.commit()
+
+
+def _require_transaction(conn: sqlite3.Connection) -> None:
+    if not conn.in_transaction:
+        raise RuntimeError("Repository writes require an active UnitOfWork transaction")
+
+
+def _append_outbox(conn: sqlite3.Connection, event: dict[str, object]) -> None:
+    conn.execute(
+        "INSERT INTO outbox_events (event_id, payload_json, created_at) VALUES (?, ?, ?)",
+        (event["eventId"], json.dumps(event, sort_keys=True), datetime.now(UTC).isoformat()),
     )
 
 
-class SqliteScanRepository(IScanRepository):
-    """SQLite implementation of IScanRepository with atomic lane & token reservation."""
+def _append_audit(conn: sqlite3.Connection, payload: dict[str, object]) -> None:
+    conn.execute(
+        "INSERT INTO local_audit_evidence (audit_id, payload_json, created_at) VALUES (?, ?, ?)",
+        (f"audit-{uuid.uuid4().hex}", json.dumps(payload, sort_keys=True), datetime.now(UTC).isoformat()),
+    )
+
+
+def _read_cycle(row: sqlite3.Row) -> GateCycle:
+    return GateCycle(
+        cycleId=row["cycle_id"], laneId=row["lane_id"], scanId=row["scan_id"],
+        supportCaseId=row["support_case_id"], passageStatus=PassageStatus(row["passage_status"]),
+        closureStatus=ClosureStatus(row["closure_status"]),
+        observationDeadline=datetime.fromisoformat(row["observation_deadline"]),
+        laneClearReceived=bool(row["lane_clear_received"]), closeCommandId=row["close_command_id"],
+        emergencySupportCaseId=row["emergency_support_case_id"],
+    )
+
+
+def _read_command(row: sqlite3.Row) -> GateCommand:
+    return GateCommand(
+        commandId=row["command_id"], cycleId=row["cycle_id"], laneId=row["lane_id"],
+        scanId=row["scan_id"], supportCaseId=row["support_case_id"],
+        commandType=CommandType(row["command_type"]), outcome=CommandOutcome(row["outcome"]),
+        issuedAt=datetime.fromisoformat(row["issued_at"]) if row["issued_at"] is not None else None,
+    )
+
+
+def _read_attendance(row: sqlite3.Row) -> AttendanceTransaction:
+    return AttendanceTransaction(
+        transactionId=row["transaction_id"], scanId=row["scan_id"], passageEventId=row["passage_event_id"],
+        employeeId=row["employee_id"], factoryId=row["factory_id"], laneId=row["lane_id"],
+        direction=Direction(row["direction"]), occurredAt=datetime.fromisoformat(row["occurred_at"]),
+        source=row["source"], degradedFlag=bool(row["degraded_flag"]), snapshotVersion=row["snapshot_version"],
+    )
+
+
+class SqliteUnitOfWork(IUnitOfWork):
+    """Own transaction boundaries and hold the connection lock until commit or rollback."""
+
+    def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
+        self._conn = conn
+        self._lock = lock or threading.RLock()
+        self._in_tx = False
+        self._owner_thread: int | None = None
+        self._after_commit: list[Callable[[], None]] = []
+
+    def after_commit(self, callback: Callable[[], None]) -> None:
+        """Run `callback` once the current transaction has committed (adapter-internal, e.g. read caches)."""
+        if not self._owned_by_caller():
+            raise RuntimeError("after_commit() requires a transaction begun by this thread")
+        self._after_commit.append(callback)
+
+    @property
+    def connection(self) -> sqlite3.Connection:
+        return self._conn
+
+    @property
+    def lock(self) -> threading.RLock:
+        return self._lock
+
+    def begin(self, timeout_ms: int | None = None) -> None:
+        """Acquire the write reservation using the caller's remaining scan budget."""
+        started_ms = time.monotonic_ns() // 1_000_000
+        acquired = self._lock.acquire() if timeout_ms is None else self._lock.acquire(timeout=max(0, timeout_ms) / 1000)
+        if not acquired:
+            raise sqlite3.OperationalError("UnitOfWork lock timeout")
+        if self._in_tx or self._conn.in_transaction:
+            self._lock.release()
+            raise RuntimeError("UnitOfWork transaction is already active")
+        try:
+            if timeout_ms is not None:
+                remaining_ms = max(0, int(timeout_ms) - (time.monotonic_ns() // 1_000_000 - started_ms))
+                self._conn.execute(f"PRAGMA busy_timeout = {remaining_ms}")
+            self._conn.execute("BEGIN IMMEDIATE")
+            self._in_tx = True
+            self._owner_thread = threading.get_ident()
+        except BaseException:
+            try:
+                self._conn.rollback()
+            finally:
+                self._lock.release()
+            raise
+
+    def _owned_by_caller(self) -> bool:
+        return self._in_tx and self._owner_thread == threading.get_ident()
+
+    def commit(self) -> None:
+        """Commit staged writes; a failed commit rolls back before releasing the lock."""
+        if not self._owned_by_caller():
+            raise RuntimeError("commit() called without a transaction begun by this thread")
+        callbacks, self._after_commit = self._after_commit, []
+        committed = False
+        try:
+            self._conn.commit()
+            committed = True
+            for callback in callbacks:  # still under the lock: readers never see the cache ahead of the database
+                callback()
+        finally:
+            try:
+                if not committed and self._conn.in_transaction:
+                    self._conn.rollback()
+            finally:
+                self._finish()
+
+    def rollback(self) -> None:
+        """Discard staged writes and release the lock, including after SQLite aborts.
+
+        Only the thread that began the transaction may roll it back. On the shared connection a rollback from any
+        other thread (for example after its own begin() failed) would discard another request's writes, so it is a
+        no-op.
+        """
+        if not self._owned_by_caller():
+            return
+        try:
+            self._conn.rollback()
+        finally:
+            self._finish()
+
+    def _finish(self) -> None:
+        self._after_commit = []
+        if self._in_tx:
+            self._in_tx = False
+            self._owner_thread = None
+            self._lock.release()
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc_val: BaseException | None,
+        exc_tb: TracebackType | None,
+    ) -> None:
+        # Commit is explicit; even a read-only or early-return path must release BEGIN IMMEDIATE.
+        if self._in_tx and self._owner_thread == threading.get_ident():
+            self.rollback()
+
+
+class SqliteScanRepository(IScanRepository, IPassageWindowQuery):
+    """SQLite implementation of IScanRepository operating within SqliteUnitOfWork's transaction context."""
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
         self._conn = conn
@@ -149,30 +375,96 @@ class SqliteScanRepository(IScanRepository):
         self.simulate_write_failure: bool = False
 
     def seed_lane(self, lane: Lane) -> None:
+        """Bootstrap lane configuration while preserving a reservation across restarts."""
         with self._lock:
             self._conn.execute(
                 """
-                INSERT OR REPLACE INTO lanes (lane_id, station_id, factory_id, direction, active_cycle_id)
+                INSERT INTO lanes (lane_id, station_id, factory_id, direction, active_cycle_id)
                 VALUES (?, ?, ?, ?, ?)
+                ON CONFLICT(lane_id) DO UPDATE SET station_id = excluded.station_id,
+                    factory_id = excluded.factory_id, direction = excluded.direction
                 """,
                 (lane.laneId, lane.stationId, lane.factoryId, lane.direction.value, lane.activeCycleId),
             )
 
+    def get_command(self, commandId: str) -> GateCommand | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gate_commands WHERE command_id = ?", (commandId,)).fetchone()
+            return _read_command(row) if row is not None else None
+
+    def save_command(self, command: GateCommand) -> None:
+        """Stage command history without touching the cycle or lane reservation."""
+        with self._lock:
+            _require_transaction(self._conn)
+            self._conn.execute(
+                """INSERT INTO gate_commands
+                    (command_id, cycle_id, lane_id, scan_id, support_case_id, command_type, outcome, issued_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(command_id) DO UPDATE SET
+                        cycle_id = excluded.cycle_id, lane_id = excluded.lane_id, scan_id = excluded.scan_id,
+                        support_case_id = excluded.support_case_id, command_type = excluded.command_type,
+                        outcome = excluded.outcome""",
+                (command.commandId, command.cycleId, command.laneId, command.scanId, command.supportCaseId,
+                 command.commandType.value, command.outcome.value,
+                 command.issuedAt.isoformat() if command.issuedAt is not None else None),
+            )
+
+    def get_command_by_support_case(self, supportCaseId: str, commandType: str) -> GateCommand | None:
+        """Find the latest command for both the support case and requested command type."""
+        with self._lock:
+            row = self._conn.execute(
+                "SELECT * FROM gate_commands WHERE support_case_id = ? AND command_type = ? ORDER BY rowid DESC LIMIT 1",
+                (supportCaseId, commandType),
+            ).fetchone()
+            return _read_command(row) if row is not None else None
+
     def get_scan(self, scanId: str) -> ScanAttempt | None:
-        """TODO [Package 4]: Query `scan_attempts` by `scan_id` and return `ScanAttempt` or `None`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_scan")
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM scan_attempts WHERE scan_id = ?", (scanId,)).fetchone()
+            if row is None:
+                return None
+            return ScanAttempt(
+                scanId=row["scan_id"], tokenId=row["token_id"], employeeId=row["employee_id"],
+                factoryId=row["factory_id"], laneId=row["lane_id"], state=ScanState(row["state"]),
+                createdAt=datetime.fromisoformat(row["created_at"]), degradedFlag=bool(row["degraded_flag"]),
+                snapshotVersion=row["snapshot_version"], reason=row["reason"],
+            )
 
     def save_scan(self, scan: ScanAttempt, audit_payload: dict[str, object] | None = None) -> None:
-        """TODO [Package 4]: Persist `ScanAttempt` (and optional `audit_payload` in `local_audit_evidence`) in a transaction."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_scan")
+        """Stage the scan and optional durable audit evidence in the current UoW."""
+        with self._lock:
+            _require_transaction(self._conn)
+            self._conn.execute(
+                """INSERT INTO scan_attempts
+                    (scan_id, token_id, employee_id, factory_id, lane_id, state, degraded_flag,
+                     snapshot_version, reason, created_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(scan_id) DO UPDATE SET
+                        token_id = excluded.token_id, employee_id = excluded.employee_id,
+                        factory_id = excluded.factory_id, lane_id = excluded.lane_id, state = excluded.state,
+                        degraded_flag = excluded.degraded_flag, snapshot_version = excluded.snapshot_version,
+                        reason = excluded.reason""",
+                (scan.scanId, scan.tokenId, scan.employeeId, scan.factoryId, scan.laneId, scan.state.value,
+                 int(scan.degradedFlag), scan.snapshotVersion, scan.reason, scan.createdAt.isoformat()),
+            )
+            if audit_payload is not None:
+                _append_audit(self._conn, audit_payload)
 
     def get_lane(self, laneId: str) -> Lane | None:
-        """TODO [Package 4]: Query `lanes` by `lane_id` and return `Lane` or `None`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_lane")
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM lanes WHERE lane_id = ?", (laneId,)).fetchone()
+            if row is None:
+                return None
+            return Lane(row["lane_id"], row["station_id"], row["factory_id"],
+                        Direction(row["direction"]), row["active_cycle_id"])
 
     def get_active_cycle_for_lane(self, laneId: str) -> GateCycle | None:
-        """TODO [Package 4]: Look up `active_cycle_id` on `lanes` and return the corresponding `GateCycle`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_active_cycle_for_lane")
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT gate_cycles.* FROM lanes JOIN gate_cycles ON gate_cycles.cycle_id = lanes.active_cycle_id
+                   WHERE lanes.lane_id = ?""", (laneId,),
+            ).fetchone()
+            return _read_cycle(row) if row is not None else None
 
     def atomic_reserve_lane_claim_token_and_accept(
         self,
@@ -180,17 +472,47 @@ class SqliteScanRepository(IScanRepository):
         reservation: TokenReservation,
         cycle: GateCycle,
         command: GateCommand,
+        timeout_ms: int | None = None,
     ) -> tuple[bool, str]:
-        """Execute Flow A4 in one atomic SQLite transaction (`BEGIN IMMEDIATE` ... `COMMIT`) (ADR-02, ADR-11).
+        """Execute Flow A4 inside the active UnitOfWork transaction (ADR-02, ADR-11).
 
-        TODO [Package 4]:
-        1. If `self.simulate_write_failure` is True, return `(False, "STORAGE_FAILURE")`.
-        2. Check `lanes.active_cycle_id`: if not None, `ROLLBACK` and return `(False, "LANE_BUSY")` (do NOT claim tokenId!).
-        3. Check `token_reservations`: if `reservation.tokenId` already exists, `ROLLBACK` and return `(False, "TOKEN_ALREADY_CLAIMED")`.
-        4. Insert `token_reservations`, `gate_cycles`, update `lanes.active_cycle_id`, insert `scan_attempts`, and insert `gate_commands`.
-        5. `COMMIT` and return `(True, "ACCEPTED")`.
+        - If lane is busy -> return `(False, "LANE_BUSY")` without claiming `tokenId`.
+        - If `tokenId` is already claimed -> return `(False, "TOKEN_ALREADY_CLAIMED")`.
+        - If `busy_timeout` expires or write fails -> return `(False, "STORAGE_FAILURE")`.
+        - Otherwise stage `token_reservations`, `gate_cycles`, `lanes.active_cycle_id`, `scan_attempts`, and `gate_commands`
+          and return `(True, "ACCEPTED")`.
         """
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.atomic_reserve_lane_claim_token_and_accept")
+        with self._lock:
+            # BEGIN IMMEDIATE and its timeout belong to UoW. The caller must roll back any failed result.
+            if not self._conn.in_transaction:
+                return False, "STORAGE_FAILURE"
+            try:
+                lane = self.get_lane(scan.laneId)
+                if lane is None:
+                    return False, "STORAGE_FAILURE"
+                if lane.activeCycleId is not None:
+                    return False, "LANE_BUSY"
+                claimed = self._conn.execute(
+                    "SELECT 1 FROM token_reservations WHERE factory_id = ? AND token_id = ?",
+                    (reservation.factoryId, reservation.tokenId),
+                ).fetchone()
+                if claimed is not None:
+                    return False, "TOKEN_ALREADY_CLAIMED"
+                if self.simulate_write_failure:
+                    return False, "STORAGE_FAILURE"
+                if self.get_scan(scan.scanId) is not None:
+                    return False, "STORAGE_FAILURE"
+                self._conn.execute(
+                    """INSERT INTO token_reservations (token_id, scan_id, factory_id, claimed_at, expires_at)
+                       VALUES (?, ?, ?, ?, ?)""",
+                    (reservation.tokenId, reservation.scanId, reservation.factoryId,
+                     reservation.claimedAt.isoformat(), reservation.expiresAt.isoformat()),
+                )
+                self.update_cycle(cycle, command=command)
+                self.save_scan(scan)
+                return True, "ACCEPTED"
+            except sqlite3.Error:
+                return False, "STORAGE_FAILURE"
 
     def update_opening_outcome(
         self,
@@ -203,18 +525,49 @@ class SqliteScanRepository(IScanRepository):
         outboxEvent: dict[str, object] | None = None,
         auditPayload: dict[str, object] | None = None,
     ) -> None:
-        """TODO [Package 4]: Update `scan_attempts.state`, `gate_commands.outcome`, release lane if requested,
-        and insert `outboxEvent` / `auditPayload` in one transaction.
+        """Update `scan_attempts.state`, `gate_commands.outcome`, release lane if requested,
+        and insert `outboxEvent` / `auditPayload` inside the active UnitOfWork transaction.
         """
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.update_opening_outcome")
+        with self._lock:
+            _require_transaction(self._conn)
+            self._conn.execute("UPDATE scan_attempts SET state = ?, reason = ? WHERE scan_id = ?",
+                               (scanState, commandOutcome, scanId))
+            self._conn.execute("UPDATE gate_commands SET outcome = ? WHERE command_id = ?",
+                               (commandOutcome, commandId))
+            if releaseLane:
+                self._conn.execute("UPDATE gate_cycles SET closure_status = ? WHERE cycle_id = ?",
+                                   (ClosureStatus.CLOSED.value, cycleId))
+                self._conn.execute("UPDATE lanes SET active_cycle_id = NULL WHERE active_cycle_id = ?", (cycleId,))
+            if outboxEvent is not None:
+                _append_outbox(self._conn, outboxEvent)
+            if auditPayload is not None:
+                _append_audit(self._conn, auditPayload)
 
     def get_cycle_by_command(self, commandId: str) -> GateCycle | None:
-        """TODO [Package 4]: Look up `cycle_id` in `gate_commands` by `command_id` and return `GateCycle`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_cycle_by_command")
+        with self._lock:
+            row = self._conn.execute(
+                """SELECT gate_cycles.* FROM gate_commands JOIN gate_cycles USING (cycle_id)
+                   WHERE command_id = ?""", (commandId,),
+            ).fetchone()
+            return _read_cycle(row) if row is not None else None
+
+    def list_cycles_awaiting_passage(self, deadline_before: datetime) -> list[GateCycle]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM gate_cycles WHERE passage_status = ?", (PassageStatus.WAITING.value,)
+            ).fetchall()
+        cycles = [_read_cycle(row) for row in rows]
+        return [cycle for cycle in cycles if cycle.observationDeadline < deadline_before]
+
+    def get_cycle_by_scan(self, scanId: str) -> GateCycle | None:
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gate_cycles WHERE scan_id = ?", (scanId,)).fetchone()
+            return _read_cycle(row) if row is not None else None
 
     def get_cycle(self, cycleId: str) -> GateCycle | None:
-        """TODO [Package 4]: Query `gate_cycles` by `cycle_id` and return `GateCycle` or `None`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_cycle")
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM gate_cycles WHERE cycle_id = ?", (cycleId,)).fetchone()
+            return _read_cycle(row) if row is not None else None
 
     def update_cycle(
         self,
@@ -222,16 +575,80 @@ class SqliteScanRepository(IScanRepository):
         releaseLane: bool = False,
         command: GateCommand | None = None,
     ) -> None:
-        """TODO [Package 4]: Upsert `gate_cycles`, optionally upsert `gate_commands`, and update `lanes.active_cycle_id`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.update_cycle")
+        """Stage cycle state, optional command history, and the corresponding lane reservation."""
+        with self._lock:
+            _require_transaction(self._conn)
+            self._conn.execute(
+                """INSERT INTO gate_cycles
+                    (cycle_id, lane_id, scan_id, support_case_id, passage_status, closure_status,
+                     observation_deadline, lane_clear_received, close_command_id, emergency_support_case_id)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    ON CONFLICT(cycle_id) DO UPDATE SET
+                        lane_id = excluded.lane_id, scan_id = excluded.scan_id,
+                        support_case_id = excluded.support_case_id, passage_status = excluded.passage_status,
+                        closure_status = excluded.closure_status, observation_deadline = excluded.observation_deadline,
+                        lane_clear_received = excluded.lane_clear_received, close_command_id = excluded.close_command_id,
+                        emergency_support_case_id = excluded.emergency_support_case_id""",
+                (cycle.cycleId, cycle.laneId, cycle.scanId, cycle.supportCaseId, cycle.passageStatus.value,
+                 cycle.closureStatus.value, cycle.observationDeadline.isoformat(), int(cycle.laneClearReceived),
+                 cycle.closeCommandId, cycle.emergencySupportCaseId),
+            )
+            if command is not None:
+                self.save_command(command)
+            if releaseLane or not cycle.is_active_or_unresolved():
+                self._conn.execute(
+                    "UPDATE lanes SET active_cycle_id = NULL WHERE lane_id = ? AND active_cycle_id = ?",
+                    (cycle.laneId, cycle.cycleId),
+                )
+            else:
+                updated = self._conn.execute(
+                    """UPDATE lanes SET active_cycle_id = ? WHERE lane_id = ?
+                       AND (active_cycle_id IS NULL OR active_cycle_id = ?)""",
+                    (cycle.cycleId, cycle.laneId, cycle.cycleId),
+                )
+                if updated.rowcount != 1:
+                    raise sqlite3.IntegrityError("Lane is missing or reserved by another GateCycle")
 
-    def save_support_case(self, case: SupportCase) -> None:
-        """TODO [Package 4]: Insert or replace `SupportCase` in `support_cases`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.save_support_case")
+    def save_support_case(
+        self,
+        case: SupportCase,
+        outboxEvent: dict[str, object] | None = None,
+        auditPayload: dict[str, object] | None = None,
+    ) -> bool:
+        """Stage `SupportCase` and evidence, returning False for a duplicate supportCaseId.
+
+        Insert only (PRIMARY KEY supportCaseId), never INSERT OR REPLACE: Gate Core checks for an existing case
+        in the same Unit of Work and must never overwrite stored evidence.
+        """
+        with self._lock:
+            _require_transaction(self._conn)
+            inserted = self._conn.execute(
+                """INSERT INTO support_cases
+                    (support_case_id, factory_id, lane_id, guard_id, employee_id, reason,
+                     linked_scan_id, is_emergency, occurred_at)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(support_case_id) DO NOTHING""",
+                (case.supportCaseId, case.factoryId, case.laneId, case.guardId, case.employeeId, case.reason,
+                 case.linkedScanId, int(case.isEmergency), case.occurredAt.isoformat()),
+            )
+            if inserted.rowcount == 0:
+                return False
+            if outboxEvent is not None:
+                _append_outbox(self._conn, outboxEvent)
+            if auditPayload is not None:
+                _append_audit(self._conn, auditPayload)
+            return True
 
     def get_support_case(self, supportCaseId: str) -> SupportCase | None:
-        """TODO [Package 4]: Query `support_cases` by `support_case_id`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteScanRepository.get_support_case")
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM support_cases WHERE support_case_id = ?", (supportCaseId,)).fetchone()
+            if row is None:
+                return None
+            return SupportCase(
+                supportCaseId=row["support_case_id"], factoryId=row["factory_id"], laneId=row["lane_id"],
+                guardId=row["guard_id"], employeeId=row["employee_id"], reason=row["reason"],
+                linkedScanId=row["linked_scan_id"], isEmergency=bool(row["is_emergency"]),
+                occurredAt=datetime.fromisoformat(row["occurred_at"]),
+            )
 
 
 class SqliteAttendanceRepository(IAttendanceRepository):
@@ -249,50 +666,277 @@ class SqliteAttendanceRepository(IAttendanceRepository):
         outboxEvent: dict[str, object],
         auditPayload: dict[str, object],
     ) -> bool:
-        """TODO [Package 4]:
+        """Stage all passage evidence together; the caller owns commit and rollback.
         1. Ignore duplicate `passage.passageEventId` (return False if already in `passage_events`).
-        2. Insert `passage_events`, update `gate_cycles.passage_status`, and if `transaction is not None`
-           insert at most one `attendance_transactions` row per `scan_id`.
-        3. Insert `outbox_events` and `local_audit_evidence` in the same transaction.
+        2. Insert `passage_events` (a GateCycle may have multiple PassageEvents), update `gate_cycles.passage_status`,
+           and if `transaction is not None` insert at most one `attendance_transactions` row per `scan_id`.
+        3. Insert `outbox_events` and `local_audit_evidence` in the same UnitOfWork transaction.
         """
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteAttendanceRepository.store_passage_and_attendance_atomic")
+        with self._lock:
+            _require_transaction(self._conn)
+            inserted = self._conn.execute(
+                """INSERT INTO passage_events
+                    (passage_event_id, command_id, cycle_id, lane_id, occurred_at, review_reason)
+                    VALUES (?, ?, ?, ?, ?, ?) ON CONFLICT(passage_event_id) DO NOTHING""",
+                (passage.passageEventId, passage.commandId, passage.cycleId, passage.laneId,
+                 passage.occurredAt.isoformat(), passage.reviewReason),
+            )
+            if inserted.rowcount == 0:
+                return False
+            self._conn.execute("UPDATE gate_cycles SET passage_status = ? WHERE cycle_id = ?",
+                               (cycle.passageStatus.value, cycle.cycleId))
+            if transaction is not None:
+                self._conn.execute(
+                    """INSERT INTO attendance_transactions
+                        (transaction_id, scan_id, passage_event_id, employee_id, factory_id, lane_id, direction,
+                         occurred_at, source, degraded_flag, snapshot_version)
+                        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ON CONFLICT(scan_id) DO NOTHING""",
+                    (transaction.transactionId, transaction.scanId, transaction.passageEventId,
+                     transaction.employeeId, transaction.factoryId, transaction.laneId, transaction.direction.value,
+                     transaction.occurredAt.isoformat(), transaction.source, int(transaction.degradedFlag),
+                     transaction.snapshotVersion),
+                )
+            _append_outbox(self._conn, outboxEvent)
+            _append_audit(self._conn, auditPayload)
+            return True
 
     def get_by_scan_id(self, scanId: str) -> AttendanceTransaction | None:
-        """TODO [Package 4]: Query `attendance_transactions` by `scan_id`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteAttendanceRepository.get_by_scan_id")
+        with self._lock:
+            row = self._conn.execute("SELECT * FROM attendance_transactions WHERE scan_id = ?", (scanId,)).fetchone()
+            return _read_attendance(row) if row is not None else None
 
     def list_transactions(self) -> list[AttendanceTransaction]:
-        """TODO [Package 4]: Return all rows from `attendance_transactions` ordered by `occurred_at`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteAttendanceRepository.list_transactions")
+        with self._lock:
+            rows = self._conn.execute("SELECT * FROM attendance_transactions ORDER BY occurred_at, transaction_id")
+            return [_read_attendance(row) for row in rows]
+
+    def list_passages_for_cycle(self, cycleId: str) -> list[PassageEvent]:
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT * FROM passage_events WHERE cycle_id = ? ORDER BY occurred_at, passage_event_id", (cycleId,),
+            )
+            return [PassageEvent(
+                passageEventId=row["passage_event_id"], commandId=row["command_id"], cycleId=row["cycle_id"],
+                laneId=row["lane_id"], occurredAt=datetime.fromisoformat(row["occurred_at"]),
+                reviewReason=row["review_reason"],
+            ) for row in rows]
 
 
 class SqliteOutboxRepository(IOutboxRepository):
-    """SQLite implementation of IOutboxRepository (Table 4.7, ADR-05)."""
+    """SQLite implementation of IOutboxRepository and simulated consumer deduplication (Table 4.7, ADR-05)."""
 
     def __init__(self, conn: sqlite3.Connection, lock: threading.RLock | None = None) -> None:
         self._conn = conn
         self._lock = lock or threading.RLock()
 
     def append_event(self, event: dict[str, object]) -> None:
-        """TODO [Package 4]: Insert event JSON into `outbox_events`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteOutboxRepository.append_event")
+        """Stage an outgoing event in the caller's UnitOfWork transaction."""
+        with self._lock:
+            _require_transaction(self._conn)
+            _append_outbox(self._conn, event)
 
     def list_pending_events(self) -> list[dict[str, object]]:
-        """TODO [Package 4]: Return all events from `outbox_events`."""
-        raise NotImplementedError("TODO [Package 4]: Implement SqliteOutboxRepository.list_pending_events")
+        with self._lock:
+            rows = self._conn.execute("SELECT payload_json FROM outbox_events ORDER BY created_at, rowid")
+            return [json.loads(row["payload_json"]) for row in rows]
+
+    def check_and_mark_processed(
+        self,
+        consumer: str,
+        eventId: str,
+        payload: dict[str, object],
+    ) -> DedupStatus:
+        """Simulated consumer deduplication keyed by `(consumer, eventId)` in `processed_events`:
+        - New `(consumer, eventId)` -> insert and return `DedupStatus.APPLIED`.
+        - Same `(consumer, eventId)` with identical payload -> return `DedupStatus.DUPLICATE_IGNORED`.
+        - Same `(consumer, eventId)` with different payload -> flag conflict and return `DedupStatus.CONFLICT_FLAGGED`.
+        """
+        with self._lock:
+            _require_transaction(self._conn)
+            payload_hash = hashlib.sha256(
+                json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+            ).hexdigest()
+            inserted = self._conn.execute(
+                """INSERT INTO processed_events (consumer, event_id, payload_hash, processed_at)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(consumer, event_id) DO NOTHING""",
+                (consumer, eventId, payload_hash, datetime.now(UTC).isoformat()),
+            )
+            if inserted.rowcount == 1:
+                return DedupStatus.APPLIED
+            row = self._conn.execute(
+                "SELECT payload_hash FROM processed_events WHERE consumer = ? AND event_id = ?", (consumer, eventId),
+            ).fetchone()
+            if row["payload_hash"] == payload_hash:
+                return DedupStatus.DUPLICATE_IGNORED
+            self._conn.execute(
+                "UPDATE processed_events SET conflict_flagged = 1 WHERE consumer = ? AND event_id = ?",
+                (consumer, eventId),
+            )
+            return DedupStatus.CONFLICT_FLAGGED
+
+
+def _snapshot_to_json(snapshot: EligibilitySnapshot) -> str:
+    return json.dumps(
+        {
+            "factoryId": snapshot.factoryId,
+            "snapshotVersion": snapshot.snapshotVersion,
+            "confirmedWatermark": snapshot.confirmedWatermark.isoformat(),
+            "clockErrorBoundSec": snapshot.clockErrorBoundSec,
+            "isCompleteAndContinuous": snapshot.isCompleteAndContinuous,
+            "verificationKeys": [key.decode("ascii") for key in snapshot.verificationKeys],
+            "employees": {
+                employee_id: {
+                    "employeeId": right.employeeId,
+                    "active": right.active,
+                    "allowedFactories": sorted(right.allowedFactories),
+                    "allowedLanes": sorted(right.allowedLanes),
+                }
+                for employee_id, right in snapshot.employees.items()
+            },
+            "lanes": {lane_id: direction.value for lane_id, direction in snapshot.lanes.items()},
+        },
+        sort_keys=True,
+    )
+
+
+def _string_set(value: object) -> set[str]:
+    """A stored list of ids; set("BD") would silently become {"B", "D"}, so anything else is refused."""
+    if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+        raise ValueError("stored snapshot has an invalid id list")
+    return set(value)
+
+
+def _same_snapshot(stored: EligibilitySnapshot, given: EligibilitySnapshot) -> bool:
+    """Field-by-field equality, with exact types for the flags and numbers the domain checks by type."""
+    keys = ("factoryId", "snapshotVersion", "confirmedWatermark", "clockErrorBoundSec", "isCompleteAndContinuous",
+            "verificationKeys", "employees", "lanes")
+    if any(getattr(stored, key) != getattr(given, key) for key in keys):
+        return False
+    for key in ("snapshotVersion", "clockErrorBoundSec", "isCompleteAndContinuous"):
+        if type(getattr(stored, key)) is not type(getattr(given, key)):
+            return False
+    return all(
+        type(stored.employees[eid].active) is type(right.active)
+        and type(right.allowedFactories) is set
+        and type(right.allowedLanes) is set
+        for eid, right in given.employees.items()
+    )
+
+
+def _snapshot_from_json(text: str) -> EligibilitySnapshot:
+    """Rebuild a snapshot without coercing any value.
+
+    bool("false") is True and int(2.5) is 2, so coercion would turn a snapshot that the domain rejects into one
+    it accepts. Values are passed through unchanged and EligibilitySnapshot / AccessDecision apply the same
+    checks as before storage; only structural decoding (timestamps, keys, lane directions) can fail here.
+    """
+    data = json.loads(text)
+    employees = data["employees"]
+    return EligibilitySnapshot(
+        factoryId=data["factoryId"],
+        snapshotVersion=data["snapshotVersion"],
+        confirmedWatermark=datetime.fromisoformat(data["confirmedWatermark"]),
+        clockErrorBoundSec=data["clockErrorBoundSec"],
+        isCompleteAndContinuous=data["isCompleteAndContinuous"],
+        verificationKeys=tuple(key.encode("ascii") for key in data["verificationKeys"]),
+        employees={
+            employee_id: EmployeeRight(
+                # stored as given: a right whose own id differs from its key stays EMPLOYEE_NOT_FOUND
+                # (rows written before this field existed fall back to the key)
+                employeeId=right.get("employeeId", employee_id),
+                active=right["active"],
+                allowedFactories=_string_set(right["allowedFactories"]),
+                allowedLanes=_string_set(right["allowedLanes"]),
+            )
+            for employee_id, right in employees.items()
+        },
+        lanes={lane_id: Direction(direction) for lane_id, direction in data["lanes"].items()},
+    )
 
 
 class SqliteSnapshotRepository(ISnapshotRepository):
-    """Thread-safe holder for the factory's active EligibilitySnapshot."""
+    """The factory's active EligibilitySnapshot.
 
-    def __init__(self, initial_snapshot: EligibilitySnapshot) -> None:
-        self._snapshot = initial_snapshot
-        self._lock = threading.RLock()
+    With a connection the snapshot is stored in SQLite (table eligibility_snapshots) in the same UnitOfWork as
+    the (consumer, eventId) dedup mark, so a restart reloads the last applied rights and a replayed update can
+    never be skipped while its rights are lost. `initial_snapshot` is written only when the database has no
+    snapshot for that factory yet. Without a connection it is an in-memory holder (unit tests only).
+
+    Reads never wait for the shared lock: get_snapshot() returns the last committed snapshot, which the
+    UnitOfWork publishes right after commit (before releasing the lock). A scan therefore cannot be blocked
+    past its deadline by another request's transaction and never sees an uncommitted snapshot.
+    """
+
+    def __init__(
+        self,
+        initial_snapshot: EligibilitySnapshot,
+        conn: sqlite3.Connection | None = None,
+        lock: threading.RLock | None = None,
+        uow: "SqliteUnitOfWork | None" = None,
+    ) -> None:
+        if conn is not None and uow is None:
+            raise ValueError("a SQLite-backed snapshot repository needs the UnitOfWork that commits it")
+        self._conn = conn
+        self._uow = uow
+        self._lock = lock or threading.RLock()
+        self._factory_id = initial_snapshot.factoryId
+        self._committed = deepcopy(initial_snapshot)
+        if conn is not None:
+            with self._lock:
+                conn.execute(
+                    """INSERT INTO eligibility_snapshots (factory_id, snapshot_version, snapshot_json, updated_at)
+                       VALUES (?, ?, ?, ?) ON CONFLICT(factory_id) DO NOTHING""",
+                    (
+                        initial_snapshot.factoryId,
+                        initial_snapshot.snapshotVersion,
+                        _snapshot_to_json(initial_snapshot),
+                        datetime.now(UTC).isoformat(),
+                    ),
+                )
+                row = conn.execute(
+                    "SELECT snapshot_json FROM eligibility_snapshots WHERE factory_id = ?", (self._factory_id,)
+                ).fetchone()
+                self._committed = _snapshot_from_json(row["snapshot_json"])
 
     def get_snapshot(self) -> EligibilitySnapshot:
-        with self._lock:
-            return self._snapshot
+        # A deep copy each time: callers may change any collection of the object they receive (rights, lanes,
+        # keys) without touching the committed snapshot; only save_snapshot + commit can change that.
+        return deepcopy(self._committed)
 
     def save_snapshot(self, snapshot: EligibilitySnapshot) -> None:
+        """Stage the snapshot in the current UnitOfWork; it becomes the active snapshot when that commits."""
         with self._lock:
-            self._snapshot = snapshot
+            if self._conn is None:
+                self._committed = deepcopy(snapshot)
+                return
+            _require_transaction(self._conn)
+            self._conn.execute(
+                """INSERT INTO eligibility_snapshots (factory_id, snapshot_version, snapshot_json, updated_at)
+                   VALUES (?, ?, ?, ?) ON CONFLICT(factory_id) DO UPDATE SET
+                       snapshot_version = excluded.snapshot_version, snapshot_json = excluded.snapshot_json,
+                       updated_at = excluded.updated_at""",
+                (snapshot.factoryId, snapshot.snapshotVersion, _snapshot_to_json(snapshot), datetime.now(UTC).isoformat()),
+            )
+            staged = _snapshot_from_json(_snapshot_to_json(snapshot))
+            if not _same_snapshot(staged, snapshot):
+                # The stored copy must decide exactly like the snapshot that was applied; anything lost or
+                # changed by storage (a type, an id) is refused and the UnitOfWork rolls back the update.
+                raise ValueError("eligibility snapshot cannot be stored without changing it")
+            self._uow.after_commit(lambda: self._publish(staged))
+
+    def _publish(self, snapshot: EligibilitySnapshot) -> None:
+        self._committed = snapshot
+
+    def trust_additional_key(self, public_key_pem: bytes) -> None:
+        """Demo helper: add a verification key to the stored snapshot without changing rights or version."""
+        with self._lock:
+            current = self._committed
+            if public_key_pem in current.verificationKeys:
+                return
+            updated = deepcopy(replace(current, verificationKeys=(*current.verificationKeys, public_key_pem)))
+            if self._conn is not None:
+                self._conn.execute(
+                    "UPDATE eligibility_snapshots SET snapshot_json = ?, updated_at = ? WHERE factory_id = ?",
+                    (_snapshot_to_json(updated), datetime.now(UTC).isoformat(), self._factory_id),
+                )
+            self._committed = updated

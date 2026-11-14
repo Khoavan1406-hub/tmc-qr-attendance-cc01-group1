@@ -65,11 +65,20 @@ class CommandType(StrEnum):
 class CommandOutcome(StrEnum):
     """Controller command outcomes distinguishing receipt, confirmed opening/closing, failure, and uncertainty (§7.1.3 LSP)."""
 
+    # Stored states of a GateCommand only; a port never returns these two values.
     SENT = "SENT"
-    RECEIPT_ONLY = "RECEIPT_ONLY"
+    NOT_SENT = "NOT_SENT"
     OPEN_CONFIRMED = "OPEN_CONFIRMED"
     CLOSED = "CLOSED"
     EMERGENCY_RELEASED = "EMERGENCY_RELEASED"
     RESET_CONFIRMED = "RESET_CONFIRMED"
     CONTROLLER_ERROR = "CONTROLLER_ERROR"
     UNDETERMINED = "UNDETERMINED"
+
+
+class DedupStatus(StrEnum):
+    """Inbound event deduplication outcomes keyed by (consumer, eventId) (ADR-05)."""
+
+    APPLIED = "APPLIED"
+    DUPLICATE_IGNORED = "DUPLICATE_IGNORED"
+    CONFLICT_FLAGGED = "CONFLICT_FLAGGED"

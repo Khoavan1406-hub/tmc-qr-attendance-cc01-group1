@@ -11,19 +11,28 @@ from tmc_gate.adapters.sqlite_repos import (
     SqliteOutboxRepository,
     SqliteScanRepository,
     SqliteSnapshotRepository,
+    SqliteUnitOfWork,
     create_sqlite_connection,
     init_sqlite_schema,
 )
-from tmc_gate.adapters.turnstile_adapter import ControllerApiClient, TurnstileAdapter
+from tmc_gate.adapters.turnstile_adapter import (
+    ControllerApiClient,
+    FaultyTurnstileAdapter,
+    SimulatedTurnstileAdapter,
+    TurnstileAdapter,
+)
 
 __all__ = [
     "create_sqlite_connection",
     "init_sqlite_schema",
+    "SqliteUnitOfWork",
     "SqliteScanRepository",
     "SqliteAttendanceRepository",
     "SqliteOutboxRepository",
     "SqliteSnapshotRepository",
     "ControllerApiClient",
+    "SimulatedTurnstileAdapter",
+    "FaultyTurnstileAdapter",
     "TurnstileAdapter",
     "QrCredentialIssuance",
     "InMemoryAuditStub",

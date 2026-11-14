@@ -74,6 +74,10 @@ class GateCycle:
     scanId: str | None = None
     supportCaseId: str | None = None
     laneClearReceived: bool = False
+    closeCommandId: str | None = None
+    # supportCaseId of the emergency release that currently holds this cycle (the latest one). A reset result
+    # only applies to that emergency, so a reply for an older emergency cannot lift a newer hold.
+    emergencySupportCaseId: str | None = None
 
     def is_active_or_unresolved(self) -> bool:
         """Return True while the lane must remain reserved/busy (§4.2.2 Lane rules)."""
@@ -106,6 +110,7 @@ class PassageEvent:
     cycleId: str
     laneId: str
     occurredAt: datetime
+    reviewReason: str | None = None  # "LATE_PASSAGE" when kept for review without attendance (Table 4.23b)
 
 
 @dataclass
@@ -125,6 +130,7 @@ class AttendanceTransaction:
     occurredAt: datetime
     source: str = "QR_GATE"
     degradedFlag: bool = False
+    snapshotVersion: int = 0
 
 
 @dataclass
