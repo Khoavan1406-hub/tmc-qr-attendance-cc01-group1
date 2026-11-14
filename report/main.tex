@@ -160,24 +160,38 @@
 {\fontsize{17}{20}\selectfont\textbf{Division of Work}}
 \end{center}
 
-\vspace{6pt}
-{\renewcommand{\arraystretch}{1.4}
+\vspace{2pt}
+{\renewcommand{\arraystretch}{1.25}\setstretch{1.0}
 \begin{center}
-\begin{tabular}{|>{\centering\arraybackslash}p{20pt}|>{\raggedright\arraybackslash}p{88pt}|>{\raggedright\arraybackslash}p{122pt}|>{\raggedright\arraybackslash}p{118pt}|>{\centering\arraybackslash}p{46pt}|}
+\begin{tabular}{|>{\centering\arraybackslash}p{22pt}|>{\raggedright\arraybackslash}p{216pt}|>{\raggedright\arraybackslash}p{94pt}|>{\centering\arraybackslash}p{60pt}|}
 \hline
-\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{20pt}|}{\textbf{No.}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{88pt}|}{\textbf{Member}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{122pt}|}{\textbf{Task 1 (report)}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{118pt}|}{\textbf{Task 2 (code)}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{46pt}|}{\textbf{Done}} \\
+\multicolumn{1}{|>{\columncolor{tableheader}\centering\arraybackslash}p{22pt}|}{\textbf{No.}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{216pt}|}{\textbf{Task}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{94pt}|}{\textbf{Assigned To}} & \multicolumn{1}{>{\columncolor{tableheader}\centering\arraybackslash}p{60pt}|}{\textbf{Completion}} \\
 \hline
-1 & {\fontencoding{T5}\selectfont Văn Công Khoa} & Ch.1 Context and Requirements & Pkg 5: turnstile adapters, contract tests; port contracts, code review, repository & 100\% \\
+1 & \textbf{Ch.1 Context and Requirements:} business context, stakeholders, FR/NFR, assumptions I-01 to I-10 and main flows & {\fontencoding{T5}\selectfont Văn Công Khoa} & 100\% \\
 \hline
-2 & {\fontencoding{T5}\selectfont Phạm Đăng Khoa} & Ch.2 Architecture Characteristics & Pkg 3: GateTransactionProcessor, GateCoreFacade, API, Flow A tests & 100\% \\
+2 & \textbf{Ch.2 Architecture Characteristics:} driving characteristics, workload estimate and quality trade-offs & {\fontencoding{T5}\selectfont Phạm Đăng Khoa} & 100\% \\
 \hline
-3 & {\fontencoding{T5}\selectfont Châu Anh Nhật} & Ch.4 Logical Architecture and its diagrams & Pkg 1: EligibilitySnapshot rules and boundary tests & 100\% \\
+3 & \textbf{Ch.3 Architecture Style Selection:} candidate styles, comparison and choice of Service-based Architecture with Event-driven Integration & {\fontencoding{T5}\selectfont Trần Liên Khang} & 100\% \\
 \hline
-4 & {\fontencoding{T5}\selectfont Trần Liên Khang} & Ch.3 Style Selection; Ch.5 Physical Architecture, Issue 1 (5.8.1) & Pkg 4: SQLite unit of work, repositories, outbox & 100\% \\
+4 & \textbf{Ch.4 Logical Architecture:} module view, C\&C view, sequence diagrams, implementation class and data views & {\fontencoding{T5}\selectfont Châu Anh Nhật} & 100\% \\
 \hline
-5 & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & Ch.7 Design Principles and Security, Issue 2 (5.8.2) & Pkg 2: demo QR issuance, AccessDecision & 100\% \\
+5 & \textbf{Ch.5 Physical Architecture:} deployment view, operating policies and connectivity-loss analysis (\S5.8.1) & {\fontencoding{T5}\selectfont Trần Liên Khang} & 100\% \\
 \hline
-6 & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & Ch.6 ADRs, Ch.8 Reflection, Ch.10 Conclusion; integration & Pkg 6: Gate Intervention, Flow B tests, README; Ch.9 & 100\% \\
+6 & \textbf{Ch.7 Design Principles and Security:} SOLID, cohesion and coupling, data security; static-QR exposure analysis (\S5.8.2) & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & 100\% \\
+\hline
+7 & \textbf{Ch.6 ADRs, Ch.8 Reflection and Ch.10 Conclusion:} eleven ADRs, reflection on SOLID, open issues and future work & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
+\hline
+8 & \textbf{Ch.9 Implementation documentation; Pkg 6 Gate Intervention:} assisted open and emergency services, Flow B tests, README and integration & {\fontencoding{T5}\selectfont Nguyễn Phước Quý Bảo} & 100\% \\
+\hline
+9 & \textbf{Pkg 1:} EligibilitySnapshot rules (60-second and 30-minute limits) and boundary tests & {\fontencoding{T5}\selectfont Châu Anh Nhật} & 100\% \\
+\hline
+10 & \textbf{Pkg 2:} QR issuance for the demo, Ed25519 verification and AccessDecision & {\fontencoding{T5}\selectfont Tào Nguyễn Quang Khang} & 100\% \\
+\hline
+11 & \textbf{Pkg 3:} GateTransactionProcessor, GateCoreFacade, HTTP API and Flow A tests & {\fontencoding{T5}\selectfont Phạm Đăng Khoa} & 100\% \\
+\hline
+12 & \textbf{Pkg 4:} SQLite unit of work, repositories and outbox & {\fontencoding{T5}\selectfont Trần Liên Khang} & 100\% \\
+\hline
+13 & \textbf{Pkg 5:} turnstile adapters and contract tests; shared port contracts, code review and repository coordination & {\fontencoding{T5}\selectfont Văn Công Khoa} & 100\% \\
 \hline
 \end{tabular}
 \end{center}
