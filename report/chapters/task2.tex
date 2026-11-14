@@ -111,7 +111,7 @@ The folders follow the Entry, Business, and Persistence layers of Gate Core in F
 \hline
 \code{adapters/} & SQLite repositories and unit of work, PassageTimeoutWorker, the simulated turnstile adapters, the demo QR issuer, the demo guard sessions, and in-memory stubs. & All inner layers; external libraries: \texttt{sqlite3}, \texttt{cryptography} \\*
 \hline\noalign{\nobreak}
-\code{api/} & FastAPI routers for the kiosk, the controller signals, the guard actions, and the demo helpers. \code{app.py} is the composition root that creates every object and passes the adapters in. & Everything \\
+\code{api/} & FastAPI routers for the kiosk, the controller signals, the guard actions, and the demo helpers. \code{app.py} is the composition root that creates and wires the main application dependencies. & Everything \\
 \hline
 \end{longtable}
 \phantomsection\addcontentsline{lot}{table}{\protect\numberline{9.3}Folders of the Task 2 Code}
